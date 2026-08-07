@@ -374,25 +374,25 @@ export class Game {
       this.scene.add(this.vehicle);
       this.prelude = {
         kind: 'drive', t: 0,
-        ride: 5.2, dismount: 2.3, breach: 0.7, enter: 2.4,
+        approach: 4.6, dismount: 2.0, fadeHold: 0.55,
         p0: stopPos.clone().addScaledVector(fwd, -46).addScaledVector(lat, 26),
         p1: stopPos.clone().addScaledVector(fwd, -20).addScaledVector(lat, 6),
         p2: stopPos, gatePos, start, fwd, lat, yaw,
-        breachFired: false,
-        seatCam: new THREE.Vector3(0.4, 1.5, 0.4),
+        breachFired: false, fadeStarted: false,
         seats: [
           new THREE.Vector3(-0.45, 1.02, 0.55),
           new THREE.Vector3(0.5, 1.02, -0.6),
           new THREE.Vector3(-0.5, 1.02, -0.6)
         ],
-        stack: [
-          gatePos.clone().addScaledVector(fwd, -1.2).addScaledVector(lat, 2.1),
-          gatePos.clone().addScaledVector(fwd, -1.2).addScaledVector(lat, -2.1),
-          gatePos.clone().addScaledVector(fwd, -2.6).addScaledVector(lat, 1.2)
-        ],
-        standPos: gatePos.clone().addScaledVector(fwd, -5.2).addScaledVector(lat, -0.9)
+        // crane shot: high 3/4 dolly, outside the walls
+        craneFrom: stopPos.clone().addScaledVector(fwd, -32).addScaledVector(lat, 27).setY(16),
+        craneTo: stopPos.clone().addScaledVector(fwd, -11).addScaledVector(lat, 15).setY(8.5),
+        // gate shot: low angle beside the entrance
+        gateCam: gatePos.clone().addScaledVector(fwd, -3.2).addScaledVector(lat, 8).setY(2.3),
+        lookSmooth: null
       };
     }
+    this.cb.onCinematicStart?.();
     sound.step();
   }
 
@@ -405,8 +405,18 @@ export class Game {
   finishPrelude() {
     const pr = this.prelude;
     if (this.viewmodelPrimary) this.viewmodelPrimary.visible = true;
+    // authoritative reset: player and squad are PLACED at the spawn
+    // formation (the fade hides this), so game state is always intact
     this.camera.position.set(pr.start.x, EYE, pr.start.z);
     this.camera.rotation.set(0, this.controls.yaw, 0, 'YXZ');
+    this.player.pos.set(pr.start.x, EYE, pr.start.z);
+    const fwd = new THREE.Vector3(-Math.sin(this.controls.yaw), 0, -Math.cos(this.controls.yaw));
+    for (let i = 0; i < this.comrades.length; i++) {
+      const colOffset = this.comradeSlots[i] - this.playerSlot;
+      const slotPos = pr.start.clone().addScaledVector(fwd, -colOffset * COLUMN_SPACING).setY(0);
+      this.comrades[i].setPosition(slotPos, this.controls.yaw + Math.PI);
+      poseIdle(this.comrades[i].group, i);
+    }
     if (this.preludeChutes) {
       for (const c of this.preludeChutes) this.scene.remove(c);
       this.preludeChutes = null;
@@ -417,6 +427,7 @@ export class Game {
     this.round.segTime = 0;
     this.beginSegment(1, true);
     this.controls.enable();
+    this.cb.onPreludeFade?.(false);
     this.cb.onDismount?.();
   }
 
@@ -457,8 +468,8 @@ export class Game {
       return;
     }
 
-    // ---- drive-in cutscene
-    const tRide = pr.ride, tDis = tRide + pr.dismount, tBr = tDis + pr.breach, tEnd = tBr + pr.enter;
+    // ---- drive-in cutscene: exterior camera work, fade-cut into FPS
+    const tApp = pr.approach, tDis = tApp + pr.dismount, tEnd = tDis + pr.fadeHold;
     const bez = (u) => {
       const w = 1 - u;
       return new THREE.Vector3(
@@ -467,10 +478,15 @@ export class Game {
         w * w * pr.p0.z + 2 * u * w * pr.p1.z + u * u * pr.p2.z
       );
     };
+    const smoothLook = (target, snap = false) => {
+      if (!pr.lookSmooth || snap) pr.lookSmooth = target.clone();
+      else pr.lookSmooth.lerp(target, Math.min(1, dt * 5));
+      this.camera.lookAt(pr.lookSmooth);
+    };
 
-    if (t < tRide) {
-      // riding in: curved pull-up, squad seated, glancing around
-      const u = ease(t / tRide);
+    if (t < tApp) {
+      // SHOT 1 — crane wide: track the vehicle curving in toward the gate
+      const u = ease(t / tApp);
       const pos = bez(u);
       const ahead = bez(Math.min(1, u + 0.02));
       tmpV.subVectors(ahead, pos);
@@ -480,66 +496,51 @@ export class Game {
       this.vehicle.rotation.y = pr.vehYaw ?? pr.yaw;
       this.vehicle.updateMatrixWorld();
 
+      // squad visibly riding along
       for (let i = 0; i < this.comrades.length; i++) {
         const world = this.vehicle.localToWorld(pr.seats[i].clone());
         const c = this.comrades[i];
-        c.setPosition(world, (pr.vehYaw ?? pr.yaw) + (pr.seats[i].z > 0 ? Math.PI : 0) + Math.sin(t * 0.8 + i * 2.1) * 0.55);
+        c.setPosition(world, (pr.vehYaw ?? pr.yaw) + (pr.seats[i].z > 0 ? Math.PI : 0));
         poseIdle(c.group, t * 3 + i * 1.7);
       }
 
-      this.camera.position.copy(this.vehicle.localToWorld(pr.seatCam.clone()));
-      const lookTarget = t < 1.8
-        ? this.comrades[0].group.position.clone().setY(this.comrades[0].group.position.y + 1.5)
-        : t < 3.4
-          ? this.comrades[1].group.position.clone().setY(this.comrades[1].group.position.y + 1.5)
-          : pr.gatePos.clone().setY(1.6);
-      this.lookToward(lookTarget, dt, 2.6);
+      this.camera.position.lerpVectors(pr.craneFrom, pr.craneTo, ease(t / tApp));
+      smoothLook(this.vehicle.position.clone().setY(1.2), t < dt * 2);
     } else if (t < tDis) {
-      // dismount and stack on the gate
-      const tD = t - tRide;
-      for (let i = 0; i < this.comrades.length; i++) {
-        const c = this.comrades[i];
-        const k = ease((tD - i * 0.22) / 1.4);
-        const seatWorld = this.vehicle.localToWorld(pr.seats[i].clone()).setY(0);
-        const pos = new THREE.Vector3().lerpVectors(seatWorld, pr.stack[i], k);
-        const faceYaw = Math.atan2(pr.gatePos.x - pos.x, pr.gatePos.z - pos.z);
-        c.setPosition(pos, faceYaw);
-        if (k > 0.02 && k < 0.98) animateWalk(c.group, t * 6, 1);
-        else poseIdle(c.group, t * 3 + i);
+      // SHOT 2 — low angle at the gate: dismount, breach, run inside
+      const tD = t - tApp;
+      if (!pr.gateCut) {
+        pr.gateCut = true;
+        this.camera.position.copy(pr.gateCam);
+        smoothLook(pr.gatePos.clone().addScaledVector(pr.fwd, -3).setY(1.2), true);
       }
-      const k = ease(tD / pr.dismount);
-      const seatCamWorld = this.vehicle.localToWorld(pr.seatCam.clone());
-      this.camera.position.lerpVectors(seatCamWorld, pr.standPos.clone().setY(EYE), k);
-      this.lookToward(pr.gatePos.clone().setY(1.4), dt, 3.2);
-    } else if (t < tBr) {
-      // breach charge on the gate — weapons come up
-      if (!pr.breachFired) {
+      if (!pr.breachFired && tD > 0.9) {
         pr.breachFired = true;
         this.effects.explosion(pr.gatePos.clone().setY(1.1));
         sound.explosion();
-        this.shake = 0.4;
-        if (this.viewmodelPrimary) this.viewmodelPrimary.visible = true;
+        this.shake = 0.3;
       }
-      this.lookToward(pr.gatePos.clone().setY(1.4), dt, 4);
-    } else if (t < tEnd) {
-      // squad pours through the gate; camera walks in behind them
-      const tE = (t - tBr) / pr.enter;
-      const k = ease(tE);
       for (let i = 0; i < this.comrades.length; i++) {
         const c = this.comrades[i];
-        const colOffset = this.comradeSlots[i] - this.playerSlot;
-        const slotPos = pr.start.clone().addScaledVector(pr.fwd, -colOffset * COLUMN_SPACING);
-        const kk = ease((t - tBr - i * 0.12) / (pr.enter * 0.85));
-        const pos = new THREE.Vector3().lerpVectors(pr.stack[i], slotPos, kk);
-        c.setPosition(pos, this.controls.yaw + Math.PI);
-        if (kk > 0.02 && kk < 0.98) animateWalk(c.group, t * 6.5, 1.1);
+        const k = ease((tD - i * 0.28) / 1.35);
+        const seatWorld = this.vehicle.localToWorld(pr.seats[i].clone()).setY(0);
+        const inside = pr.gatePos.clone()
+          .addScaledVector(pr.fwd, 2.2)
+          .addScaledVector(pr.lat, (i - 1) * 1.4);
+        const pos = new THREE.Vector3().lerpVectors(seatWorld, inside, k);
+        pos.y = 0;
+        const faceYaw = Math.atan2(pr.gatePos.x - pos.x, pr.gatePos.z - pos.z);
+        c.setPosition(pos, faceYaw);
+        if (k > 0.02 && k < 0.98) animateWalk(c.group, t * 6.5, 1.1);
         else poseIdle(c.group, t * 3 + i);
       }
-      const camStart = pr.standPos.clone().setY(EYE);
-      const camEnd = pr.start.clone().setY(EYE);
-      this.camera.position.lerpVectors(camStart, camEnd, k);
-      this.camera.position.y = EYE + Math.sin(t * 9) * 0.035;
-      this.lookToward(pr.start.clone().addScaledVector(pr.fwd, 10).setY(1.4), dt, 3.5);
+      smoothLook(pr.gatePos.clone().setY(1.2));
+    } else if (t < tEnd) {
+      // fade out, then the squad is PLACED at the spawn formation
+      if (!pr.fadeStarted) {
+        pr.fadeStarted = true;
+        this.cb.onPreludeFade?.(true);
+      }
     } else {
       this.finishPrelude();
     }

@@ -157,9 +157,14 @@ function makeCryptoRng() {
 
 // ----------------------------------------------------------------- game wiring
 
+// mission title types across the screen during the insertion cinematic
+game.cb.onCinematicStart = () => {
+  ui.typewriterTitle(`${mission.subtype.toUpperCase()} — ${mission.location.name.toUpperCase()}`);
+};
+game.cb.onPreludeFade = (on) => ui.fade(on);
+
 game.cb.onDismount = () => {
   ui.showHud(true);
-  ui.typewriterTitle(`${mission.subtype.toUpperCase()} — ${mission.location.name.toUpperCase()}`);
   ui.setWeaponLabel('AMMO');
   if (!IS_TOUCH) ui.flashMsg('CLICK TO TAKE CONTROL — WASD MOVE · RMB SCOPE · SPACE FRAG · N BACKUP', 4200);
   else ui.flashMsg('LEFT STICK: MOVE · SWIPE: LOOK · 2× TAP: SCOPE · HOLD FIRE: BACKUP', 4200);
