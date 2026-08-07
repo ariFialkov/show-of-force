@@ -47,6 +47,25 @@ function tryGenerate(rng, segments, cellSize) {
   const start = b.path[0];
   const end = b.rooms[b.rooms.length - 1];
 
+  // hard guarantee: the exfil room must be reachable by orthogonal movement.
+  // (also doubles as the squad's scouting route for column leaders)
+  const route = bfsRoute(b.carved, start, end);
+  if (!route) return null;
+
+  // ...and the shortest route must pass through every decision room in
+  // order. This rejects rare layouts where a late room merges with an early
+  // corridor, which would create a sequence-skipping shortcut.
+  let ri = 0;
+  for (const room of b.rooms) {
+    let found = -1;
+    for (let i = ri; i < route.length; i++) {
+      const dx = route[i].x - room.x, dz = route[i].z - room.z;
+      if (Math.abs(dx) <= 1 && Math.abs(dz) <= 1) { found = i; break; }
+    }
+    if (found === -1) return null;
+    ri = found;
+  }
+
   let minX = Infinity, maxX = -Infinity, minZ = Infinity, maxZ = -Infinity;
   for (const c of b.carved) {
     const [x, z] = c.split(',').map(Number);
@@ -57,7 +76,7 @@ function tryGenerate(rng, segments, cellSize) {
   const carved = b.carved;
   return {
     carved, path: b.path, rooms: b.rooms, branches: b.branches, pillars: b.pillars,
-    start, end, cellSize, segments,
+    route, start, end, cellSize, segments,
     bounds: { minX, maxX, minZ, maxZ },
     toWorld: (x, z) => ({ x: x * cellSize, z: z * cellSize }),
     cellAt: (wx, wz) => ({ x: Math.round(wx / cellSize), z: Math.round(wz / cellSize) }),
@@ -104,11 +123,13 @@ function carveSplit(b, rng, seg) {
   const at = (f, lat) => ({ x: b.cur.x + h.x * f + s.x * lat, z: b.cur.z + h.z * f + s.z * lat });
   const junctionIn = at(1, 0);
   const junctionOut = at(L + 1, 0);
-  cells.push(junctionIn);
+  // full-width fork rows so the lanes connect ORTHOGONALLY to the junctions
+  // (movement is orthogonal-only; a diagonal-only link is a dead end)
+  cells.push(junctionIn, at(1, -1), at(1, 1));
   for (let i = 2; i <= L; i++) {
     cells.push(at(i, -1), at(i, 1));
   }
-  cells.push(junctionOut);
+  cells.push(junctionOut, at(L + 1, -1), at(L + 1, 1));
 
   for (const c of cells) carve(b, c.x, c.z);
   // spine: entry junction, left lane, right lane, exit junction
@@ -364,6 +385,35 @@ function weighted(rng, entries) {
   return entries[entries.length - 1][0];
 }
 
+// Shortest orthogonal path start -> end through carved cells (null if
+// disconnected). Returned as an ordered cell list.
+function bfsRoute(carved, start, end) {
+  const startK = key(start.x, start.z);
+  const endK = key(end.x, end.z);
+  const prev = new Map([[startK, null]]);
+  const q = [{ x: start.x, z: start.z }];
+  let found = carved.has(endK) && startK === endK;
+  while (q.length > 0 && !found) {
+    const c = q.shift();
+    for (const [dx, dz] of [[0, 1], [1, 0], [0, -1], [-1, 0]]) {
+      const x = c.x + dx, z = c.z + dz;
+      const k = key(x, z);
+      if (!carved.has(k) || prev.has(k)) continue;
+      prev.set(k, c);
+      if (k === endK) { found = true; break; }
+      q.push({ x, z });
+    }
+  }
+  if (!found) return null;
+  const route = [];
+  let cur = { x: end.x, z: end.z };
+  while (cur) {
+    route.push({ x: cur.x, z: cur.z });
+    cur = prev.get(key(cur.x, cur.z));
+  }
+  return route.reverse();
+}
+
 function makeSegLookup(path) {
   const m = new Map();
   for (const p of path) {
@@ -392,9 +442,11 @@ function straightFallback(segments, segLen, cellSize) {
     }
   }
   const start = path[0];
+  const end = rooms[rooms.length - 1];
   return {
-    carved, path, rooms, branches: [], pillars: [], start, end: rooms[rooms.length - 1],
-    cellSize, segments,
+    carved, path, rooms, branches: [], pillars: [],
+    route: bfsRoute(carved, start, end) ?? path.map((p) => ({ x: p.x, z: p.z })),
+    start, end, cellSize, segments,
     bounds: { minX: -1, maxX: 1, minZ: 0, maxZ: z },
     toWorld: (x, zz) => ({ x: x * cellSize, z: zz * cellSize }),
     cellAt: (wx, wz) => ({ x: Math.round(wx / cellSize), z: Math.round(wz / cellSize) }),

@@ -6,17 +6,24 @@
 
 import { GAME } from './config.js';
 
-// Per-step survival probabilities (step 1..10). Escalating danger.
-const SURVIVAL = [0.88, 0.86, 0.84, 0.82, 0.80, 0.78, 0.76, 0.74, 0.72, 0.70];
+// Per-step survival probabilities (step 1..10). The early steps are nearly
+// safe; the hazard peaks around steps 4-5 and stays high to the end.
+const SURVIVAL = [0.99, 0.97, 0.94, 0.88, 0.84, 0.83, 0.82, 0.81, 0.80, 0.79];
 
-// Multiplier ladder: with RTP r, cashing out after step i pays
-// bet * r / P(surviving through step i)  =>  EV of any strategy is r * bet.
+// Early-cashout discount on the fair ladder. Fair pay for step i is
+// r / P(survive through i); scaling it below 1 early makes the first rungs
+// pay LESS than the stake (break-even lands at step 4) and rewards riding
+// deeper. The discount reaches 1.0 at step 10, so the ride-to-the-end
+// strategy has EV exactly r * bet — that optimal strategy defines the RTP;
+// every earlier cashout has EV r * discount <= r.
+const DISCOUNT = [0.42, 0.55, 0.70, 0.82, 0.90, 0.94, 0.96, 0.98, 0.99, 1.00];
+
 export function multipliers(rtp = GAME.rtp) {
   const out = [];
   let cum = 1;
   for (let i = 0; i < GAME.maxSteps; i++) {
     cum *= SURVIVAL[i];
-    out.push((rtp / cum));
+    out.push((rtp / cum) * DISCOUNT[i]);
   }
   return out;
 }

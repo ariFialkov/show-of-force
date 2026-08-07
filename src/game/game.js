@@ -26,13 +26,10 @@ const FRAG_COOLDOWN = 4.5;
 const BASE_FOV = 75;
 const SCOPE_FOV = 32;
 
-const COMRADE_SLOTS = [
-  { x: -1.25, z: -1.7 },
-  { x: 1.25, z: -1.7 },
-  { x: 0, z: -2.9 }
-];
+const COLUMN_SPACING = 2.7; // metres between men in the file
 
 const tmpV = new THREE.Vector3();
+const tmpV2 = new THREE.Vector3();
 
 export class Game {
   constructor(canvas, controlUi) {
@@ -97,6 +94,8 @@ export class Game {
     this.mission = mission;
     const rng = makeRng(mission.seed ^ 0x5f3759df);
     this.map = generateMap(rng);
+    const S = this.map.cellSize;
+    this.routePts = this.map.route.map((c) => new THREE.Vector3(c.x * S, 0, c.z * S));
     this.world = buildWorld(this.scene, this.map, mission.location.env, rng);
     this.spawnEnemies(rng);
     this.mode = 'lobby';
@@ -155,7 +154,7 @@ export class Game {
       bet,
       plan,                    // { mults, bustStep }
       step: 1,
-      pot: bet,
+      pot: 0,
       kills: 0,
       segKills: 0,
       segEnemyTotal: 0,
@@ -177,19 +176,74 @@ export class Game {
     this.controls.yaw = Math.atan2(-(next.x - start.x), -(next.z - start.z));
     this.controls.pitch = 0;
 
-    this.spawnComrades();
+    // commander's position in the 4-man column rotates every round: 1st-3rd
+    this.playerSlot = Math.floor(Math.random() * 3);
+    this.comradeSlots = [0, 1, 2, 3].filter((s) => s !== this.playerSlot);
+
+    // seed the breadcrumb trail backwards so trailing men start in file
+    const yaw = this.controls.yaw;
+    const fwd = new THREE.Vector3(-Math.sin(yaw), 0, -Math.cos(yaw));
+    this.trail = [];
+    for (let d = 14; d >= 0.5; d -= 0.7) {
+      this.trail.push(new THREE.Vector3(this.player.pos.x - fwd.x * d, 0, this.player.pos.z - fwd.z * d));
+    }
+
+    this.spawnComrades(fwd);
     this.buildViewmodel();
     this.startPrelude();
   }
 
-  spawnComrades() {
-    const S = this.map.cellSize;
-    const start = this.map.path[0];
-    for (let i = 0; i < COMRADE_SLOTS.length; i++) {
+  spawnComrades(fwd) {
+    const start = this.player.pos;
+    for (let i = 0; i < this.comradeSlots.length; i++) {
+      const colOffset = this.comradeSlots[i] - this.playerSlot; // <0 ahead, >0 behind
       const c = new Comrade(this.scene, this.mission.team.camo, this.mission.roster[i]);
-      c.setPosition(new THREE.Vector3(start.x * S + COMRADE_SLOTS[i].x, 0, start.z * S + COMRADE_SLOTS[i].z), this.controls.yaw);
+      c.setPosition(
+        new THREE.Vector3(start.x - fwd.x * colOffset * COLUMN_SPACING, 0, start.z - fwd.z * colOffset * COLUMN_SPACING),
+        this.controls.yaw + Math.PI
+      );
       this.comrades.push(c);
     }
+  }
+
+  // point `dist` metres behind the commander along their breadcrumb trail
+  trailBehindPoint(dist) {
+    let head = tmpV2.set(this.player.pos.x, 0, this.player.pos.z);
+    let acc = 0;
+    for (let i = this.trail.length - 1; i >= 0; i--) {
+      const p = this.trail[i];
+      const segLen = head.distanceTo(p);
+      if (acc + segLen >= dist && segLen > 0.001) {
+        const t = (dist - acc) / segLen;
+        return new THREE.Vector3().lerpVectors(head, p, t);
+      }
+      acc += segLen;
+      head = p;
+    }
+    return head.clone();
+  }
+
+  // point `dist` metres ahead of the commander along the mission route
+  routeAheadPoint(dist) {
+    const R = this.routePts;
+    if (!R || R.length === 0) return this.player.pos.clone().setY(0);
+    let bestI = 0, bestD = Infinity;
+    for (let i = 0; i < R.length; i++) {
+      const d = R[i].distanceToSquared(this.player.pos);
+      if (d < bestD) { bestD = d; bestI = i; }
+    }
+    let acc = 0;
+    let head = R[bestI];
+    for (let i = bestI + 1; i < R.length; i++) {
+      const segLen = head.distanceTo(R[i]);
+      if (acc + segLen >= dist && segLen > 0.001) {
+        const t = (dist - acc) / segLen;
+        return new THREE.Vector3().lerpVectors(head, R[i], t);
+      }
+      acc += segLen;
+      head = R[i];
+    }
+    return head.clone();
   }
 
   buildViewmodel() {
@@ -306,6 +360,8 @@ export class Game {
   cashOut() {
     if (this.mode !== 'decision' || this.round.over) return 0;
     const r = this.round;
+    // below-stake rungs cannot be cashed — the UI disables the button too
+    if (r.plan.mults[r.step - 1] < 1) return 0;
     r.over = true;
     const payout = r.bet * r.plan.mults[r.step - 1];
     this.mode = 'extract';
@@ -494,6 +550,15 @@ export class Game {
     tryAxis(step.x, 0);
     tryAxis(0, step.z);
 
+    // breadcrumb trail for the trailing column
+    if (this.trail) {
+      const last = this.trail[this.trail.length - 1];
+      if (!last || Math.hypot(p.x - last.x, p.z - last.z) > 0.6) {
+        this.trail.push(new THREE.Vector3(p.x, 0, p.z));
+        if (this.trail.length > 400) this.trail.shift();
+      }
+    }
+
     // view bob
     const moving = len > 0.05;
     this.player.bob += dt * (moving ? 9 : 2);
@@ -524,7 +589,8 @@ export class Game {
     }
 
     // pot presentation: creep toward the next rung with kills + progress
-    const prevMult = r.step === 1 ? 1 : r.plan.mults[r.step - 2];
+    // (starts from 0 — nothing is secured until the first checkpoint)
+    const prevMult = r.step === 1 ? 0 : r.plan.mults[r.step - 2];
     const nextMult = r.plan.mults[r.step - 1];
     const killFrac = r.segEnemyTotal > 0 ? r.segKills / r.segEnemyTotal : 1;
     const room = this.currentRoomCenter();
@@ -554,10 +620,12 @@ export class Game {
       this.applyPlayerHit(0.6);
     }
 
-    // reaching the decision room
-    if (room) {
-      const d = Math.hypot(room.x - playerPos.x, room.z - playerPos.z);
-      if (d < this.map.cellSize * 0.85) {
+    // reaching the decision room — trigger from ANY cell of the 3x3 room,
+    // not just near its center (the route may pass along a side column)
+    const roomCell = this.map.rooms[r.step - 1];
+    if (roomCell) {
+      const pc = this.map.cellAt(playerPos.x, playerPos.z);
+      if (Math.abs(pc.x - roomCell.x) <= 1 && Math.abs(pc.z - roomCell.z) <= 1) {
         if (r.lethal) {
           // ambushed at the threshold — the round was always ending here
           this.applyPlayerHit(1.4);
@@ -716,10 +784,12 @@ export class Game {
   updateComrades(dt, combat) {
     const r = this.round;
     for (let i = 0; i < this.comrades.length; i++) {
+      const colOffset = this.comradeSlots[i] - this.playerSlot;
+      const dist = Math.abs(colOffset) * COLUMN_SPACING + (colOffset > 0 ? 1.1 : 0);
+      const targetPos = colOffset < 0 ? this.routeAheadPoint(dist) : this.trailBehindPoint(dist);
       this.comrades[i].update(dt, {
-        playerPos: this.player.pos,
+        targetPos,
         playerYaw: this.controls.yaw,
-        slot: COMRADE_SLOTS[i],
         enemies: combat ? this.enemies.filter((e) => e.seg === r.step || e.state === 'combat') : [],
         effects: this.effects,
         graceElapsed: combat && r.segTime > 4.5,

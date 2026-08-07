@@ -12,8 +12,11 @@ map, icon, and sound is generated procedurally at runtime.
 
 ## How the betting works
 
-- The game is a **stepper / crash hybrid**: max 10 checkpoints, each with an
-  escalating multiplier (≈×1.14 up to ≈×10.8 at RTP 1.0).
+- The game is a **stepper / crash hybrid**: max 10 checkpoints on an
+  escalating multiplier ladder (at RTP 1.0: ≈×0.42 → ×4.30). The first three
+  rungs pay **below stake** (cash-out locked), break-even lands at
+  checkpoint 4, and the bust hazard peaks around checkpoints 4-5 — early
+  steps are nearly safe, the mid-game is where rounds die.
 - The entire round outcome (which step busts, if any) is drawn **up-front** in
   `src/rtp.js` from fresh entropy — the only inputs that affect payout are the
   bet amount and the configured RTP (`GAME.rtp` in `src/config.js`, default 1.0).

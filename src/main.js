@@ -138,7 +138,7 @@ function startRound() {
   const plan = drawRound(makeCryptoRng());
   ui.buildStepDots();
   ui.setStep(1);
-  ui.setPot(bet, bet * plan.mults[0]);
+  ui.setPot(0, bet * plan.mults[0]);
   ui.setKills(0);
   ui.setAmmo(30, false);
   ui.setHealth(100);
@@ -184,7 +184,8 @@ game.cb.onDecision = (step, pot) => {
     nextMult: game.round.plan.mults[step], // multiplier if the next step survives
     optionA: flavor[0],
     optionB: flavor[1],
-    cashAmount: pot
+    cashAmount: pot,
+    canCash: game.round.plan.mults[step - 1] >= 1
   }, {
     onContinue: (which) => {
       sound.click();

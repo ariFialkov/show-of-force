@@ -113,16 +113,25 @@ export function typewriterTitle(text, done) {
 
 // ---------------------------------------------------------- decision UI
 
-export function showDecision({ step, maxSteps, pot, nextMult, optionA, optionB, cashAmount }, handlers) {
+export function showDecision({ step, maxSteps, pot, nextMult, optionA, optionB, cashAmount, canCash }, handlers) {
   els.decisionKicker.textContent = `DECISION POINT ${step} / ${maxSteps}`;
   els.decisionPot.textContent = fmtMoney(pot);
   els.decisionNext.textContent = fmtMult(nextMult);
   els.decisionA.textContent = `▸ ${optionA}`;
   els.decisionB.textContent = `▸ ${optionB}`;
-  els.decisionCashAmt.textContent = fmtMoney(cashAmount);
   els.decisionA.onclick = () => { hideDecision(); handlers.onContinue('a'); };
   els.decisionB.onclick = () => { hideDecision(); handlers.onContinue('b'); };
-  els.decisionCash.onclick = () => { hideDecision(); handlers.onCashOut(); };
+  if (canCash) {
+    els.decisionCash.disabled = false;
+    els.decisionCash.childNodes[0].textContent = 'CASH OUT ';
+    els.decisionCashAmt.textContent = fmtMoney(cashAmount);
+    els.decisionCash.onclick = () => { hideDecision(); handlers.onCashOut(); };
+  } else {
+    els.decisionCash.disabled = true;
+    els.decisionCash.childNodes[0].textContent = 'CASH OUT LOCKED — BELOW STAKE ';
+    els.decisionCashAmt.textContent = fmtMoney(cashAmount);
+    els.decisionCash.onclick = null;
+  }
   els.decision.classList.remove('hidden');
 }
 

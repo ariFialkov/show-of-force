@@ -156,27 +156,16 @@ export class Comrade {
     this.initialized = false;
   }
 
-  // slotOffset: local offset behind the player (x = lateral, z = back)
+  // Column movement: seek an assigned column point (computed by the game —
+  // ahead of the commander along the mission route, or behind along the
+  // commander's own trail), stopping to trade fire when enemies are up.
   update(dt, ctx) {
-    const { playerPos, playerYaw, slot, enemies, effects, graceElapsed, onComradeKill } = ctx;
+    const { targetPos, playerYaw, enemies, effects, graceElapsed, onComradeKill } = ctx;
 
-    // target formation position behind the player
-    // forward = (-sinY, -cosY), right = (cosY, -sinY); slot.z < 0 means behind
-    const sinY = Math.sin(playerYaw), cosY = Math.cos(playerYaw);
-    const lx = slot.x, lz = slot.z;
-    tmpV.set(
-      playerPos.x + (cosY * lx - sinY * lz),
-      0,
-      playerPos.z + (-sinY * lx - cosY * lz)
-    );
     if (!this.initialized) {
-      this.smooth.copy(tmpV);
+      this.smooth.copy(targetPos);
       this.initialized = true;
     }
-    const dist = this.smooth.distanceTo(tmpV);
-    const speed = THREE.MathUtils.clamp(dist * 2.2, 0, 7);
-    this.smooth.lerp(tmpV, Math.min(1, dt * 2.5));
-    this.group.position.copy(this.smooth);
 
     // pick nearest live engaged enemy
     let target = null, best = Infinity;
@@ -185,6 +174,21 @@ export class Comrade {
       const d = e.group.position.distanceToSquared(this.smooth);
       if (d < best) { best = d; target = e; }
     }
+
+    tmpV.subVectors(targetPos, this.smooth);
+    tmpV.y = 0;
+    const dist = tmpV.length();
+    const holdForFight = target !== null && dist < 7;
+    let moving = false;
+    if (!holdForFight && dist > 0.22) {
+      const speed = THREE.MathUtils.clamp(1.6 + dist * 1.7, 0, 6.8);
+      const step = Math.min(dist, speed * dt);
+      tmpV.normalize();
+      this.smooth.addScaledVector(tmpV, step);
+      this.group.rotation.y = Math.atan2(tmpV.x, tmpV.z);
+      moving = step > dt * 0.7;
+    }
+    this.group.position.copy(this.smooth);
 
     if (target) {
       tmpV2.subVectors(target.group.position, this.group.position);
@@ -205,15 +209,13 @@ export class Comrade {
           if (died) onComradeKill?.(target);
         }
       }
+    } else if (moving) {
+      this.walkT += dt * 1.4;
+      animateWalk(this.group, this.walkT, 1);
     } else {
-      if (speed > 0.4) {
-        this.group.rotation.y = playerYaw + Math.PI; // soldier models face +Z; camera yaw 0 faces -Z
-        this.walkT += dt * (0.6 + speed * 0.12);
-        animateWalk(this.group, this.walkT, 1);
-      } else {
-        poseIdle(this.group);
-        this.group.rotation.y = playerYaw + Math.PI; // soldier models face +Z; camera yaw 0 faces -Z
-      }
+      poseIdle(this.group);
+      // hold facing the commander's heading (models face +Z; camera yaw 0 faces -Z)
+      this.group.rotation.y = playerYaw + Math.PI;
     }
   }
 
