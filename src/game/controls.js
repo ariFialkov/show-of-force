@@ -2,13 +2,13 @@
 //
 // Desktop: WASD move, mouse-look (pointer lock), left-click fire,
 //          space frag, right-click toggles scope.
-// Mobile:  LEFT dynamic joystick = aim, RIGHT dynamic joystick = move,
-//          FIRE / FRAG buttons, double-tap on the aim side toggles scope.
+// Mobile:  static LEFT joystick = move; swipe/drag anywhere else = look;
+//          FIRE / FRAG buttons; double-tap the look area toggles scope.
 
 export const IS_TOUCH = matchMedia('(pointer: coarse)').matches || 'ontouchstart' in window;
 
-const AIM_JOY_SPEED = 3.2;     // rad/s at full deflection
 const MOUSE_SENS = 0.0023;
+const LOOK_DRAG_SENS = 0.0044; // rad per px of swipe
 const JOY_RADIUS = 56;         // px, full deflection
 
 export class Controls {
@@ -28,20 +28,11 @@ export class Controls {
     this.onFirstInteract = null;
 
     this.keys = new Set();
-    this.aimPointer = null;  // { id, ox, oy, dx, dy }
+    this.lookPointer = null; // { id, lx, ly }
     this.movePointer = null;
-    this.lastLeftTap = 0;
+    this.lastLookTap = 0;
 
     this._bind();
-  }
-
-  get aimRate() {
-    // rad/s applied by game.update for touch aim
-    if (!this.aimPointer) return { yaw: 0, pitch: 0 };
-    const sens = this.scoped ? 0.45 : 1;
-    const nx = clamp(this.aimPointer.dx / JOY_RADIUS, -1, 1);
-    const ny = clamp(this.aimPointer.dy / JOY_RADIUS, -1, 1);
-    return { yaw: -nx * AIM_JOY_SPEED * sens, pitch: -ny * AIM_JOY_SPEED * 0.7 * sens };
   }
 
   setScoped(v) {
@@ -57,10 +48,9 @@ export class Controls {
     this.firing = false;
     this.move.x = 0; this.move.z = 0;
     this.keys.clear();
-    this.aimPointer = null;
+    this.lookPointer = null;
     this.movePointer = null;
-    this._hideJoy(this.ui.joyL);
-    this._hideJoy(this.ui.joyR);
+    this._resetKnob();
     this.setScoped(false);
   }
 
@@ -121,53 +111,49 @@ export class Controls {
       if (e.target.closest?.('.combat-btn')) return; // buttons handle themselves
       this.onFirstInteract?.();
       if (!this.enabled) return;
-      const half = window.innerWidth / 2;
-      if (e.clientX < half) {
-        // aim side + double-tap scope
+
+      // static move joystick zone (bottom-left)
+      const joyRect = this.ui.joyL.getBoundingClientRect();
+      const jcx = joyRect.left + joyRect.width / 2;
+      const jcy = joyRect.top + joyRect.height / 2;
+      const inJoy = Math.hypot(e.clientX - jcx, e.clientY - jcy) < Math.max(70, joyRect.width * 0.8);
+
+      if (inJoy && !this.movePointer) {
+        this.movePointer = { id: e.pointerId, cx: jcx, cy: jcy };
+        this._applyMove(e.clientX, e.clientY);
+      } else if (!this.lookPointer) {
+        // swipe-to-look anywhere else; double-tap toggles scope
         const now = performance.now();
-        if (now - this.lastLeftTap < 300) {
+        if (now - this.lastLookTap < 300) {
           this.setScoped(!this.scoped);
-          this.lastLeftTap = 0;
+          this.lastLookTap = 0;
         } else {
-          this.lastLeftTap = now;
+          this.lastLookTap = now;
         }
-        if (!this.aimPointer) {
-          this.aimPointer = { id: e.pointerId, ox: e.clientX, oy: e.clientY, dx: 0, dy: 0 };
-          this._showJoy(this.ui.joyL, e.clientX, e.clientY);
-        }
-      } else {
-        if (!this.movePointer) {
-          this.movePointer = { id: e.pointerId, ox: e.clientX, oy: e.clientY, dx: 0, dy: 0 };
-          this._showJoy(this.ui.joyR, e.clientX, e.clientY);
-        }
+        this.lookPointer = { id: e.pointerId, lx: e.clientX, ly: e.clientY };
       }
     });
 
     layer.addEventListener('pointermove', (e) => {
-      if (this.aimPointer && e.pointerId === this.aimPointer.id) {
-        this.aimPointer.dx = e.clientX - this.aimPointer.ox;
-        this.aimPointer.dy = e.clientY - this.aimPointer.oy;
-        this._moveKnob(this.ui.joyL, this.aimPointer);
-      } else if (this.movePointer && e.pointerId === this.movePointer.id) {
-        this.movePointer.dx = e.clientX - this.movePointer.ox;
-        this.movePointer.dy = e.clientY - this.movePointer.oy;
-        this._moveKnob(this.ui.joyR, this.movePointer);
-        const nx = clamp(this.movePointer.dx / JOY_RADIUS, -1, 1);
-        const ny = clamp(this.movePointer.dy / JOY_RADIUS, -1, 1);
-        this.move.x = nx;
-        this.move.z = -ny;
+      if (this.movePointer && e.pointerId === this.movePointer.id) {
+        this._applyMove(e.clientX, e.clientY);
+      } else if (this.lookPointer && e.pointerId === this.lookPointer.id) {
+        const sens = LOOK_DRAG_SENS * (this.scoped ? 0.45 : 1);
+        this.yaw -= (e.clientX - this.lookPointer.lx) * sens;
+        this.pitch = clamp(this.pitch - (e.clientY - this.lookPointer.ly) * sens, -1.35, 1.35);
+        this.lookPointer.lx = e.clientX;
+        this.lookPointer.ly = e.clientY;
       }
     });
 
     const endPointer = (e) => {
-      if (this.aimPointer && e.pointerId === this.aimPointer.id) {
-        this.aimPointer = null;
-        this._hideJoy(this.ui.joyL);
+      if (this.lookPointer && e.pointerId === this.lookPointer.id) {
+        this.lookPointer = null;
       }
       if (this.movePointer && e.pointerId === this.movePointer.id) {
         this.movePointer = null;
         this.move.x = 0; this.move.z = 0;
-        this._hideJoy(this.ui.joyR);
+        this._resetKnob();
       }
     };
     layer.addEventListener('pointerup', endPointer);
@@ -201,23 +187,22 @@ export class Controls {
     this.move.z = z / len;
   }
 
-  _showJoy(el, x, y) {
-    el.style.display = 'block';
-    el.style.left = `${x}px`;
-    el.style.top = `${y}px`;
-    el.querySelector('.joy-knob').style.transform = 'translate(-50%,-50%)';
-  }
-
-  _moveKnob(el, p) {
-    const len = Math.hypot(p.dx, p.dy);
+  _applyMove(px, py) {
+    const p = this.movePointer;
+    const dx = px - p.cx, dy = py - p.cy;
+    const len = Math.hypot(dx, dy);
     const capped = Math.min(len, JOY_RADIUS);
-    const kx = len > 0 ? (p.dx / len) * capped : 0;
-    const ky = len > 0 ? (p.dy / len) * capped : 0;
-    el.querySelector('.joy-knob').style.transform = `translate(calc(-50% + ${kx}px), calc(-50% + ${ky}px))`;
+    const kx = len > 0 ? (dx / len) * capped : 0;
+    const ky = len > 0 ? (dy / len) * capped : 0;
+    this.ui.joyL.querySelector('.joy-knob').style.transform =
+      `translate(calc(-50% + ${kx}px), calc(-50% + ${ky}px))`;
+    this.move.x = clamp(dx / JOY_RADIUS, -1, 1);
+    this.move.z = clamp(-dy / JOY_RADIUS, -1, 1);
   }
 
-  _hideJoy(el) {
-    el.style.display = 'none';
+  _resetKnob() {
+    const knob = this.ui.joyL?.querySelector('.joy-knob');
+    if (knob) knob.style.transform = 'translate(-50%,-50%)';
   }
 }
 

@@ -12,7 +12,7 @@ import { generateMap } from './mapgen.js';
 import { buildWorld } from './world.js';
 import { Effects, sound } from './effects.js';
 import { EnemyBot, Comrade } from './bots.js';
-import { makeVehicle, makeCar, makeCivilian, makeObjectiveProp } from './models.js';
+import { makeVehicle, makeCar, makeCivilian, makeObjectiveProp, makeGate } from './models.js';
 import { Controls, IS_TOUCH } from './controls.js';
 import { makeRng } from '../rng.js';
 
@@ -150,6 +150,10 @@ export class Game {
     if (this.npc) { this.npc.dispose(); this.npc = null; }
     if (this.objective?.beacon) this.scene.remove(this.objective.beacon);
     this.objective = null;
+    if (this.gatePhase) {
+      for (const g of this.gatePhase.gates) this.scene.remove(g);
+      this.gatePhase = null;
+    }
     if (this.vehicle) { this.scene.remove(this.vehicle); this.vehicle = null; }
     if (this.viewmodel) { this.camera.remove(this.viewmodel); }
     this.effects.clear();
@@ -647,25 +651,19 @@ export class Game {
     }
   }
 
-  // called by UI after a decision choice — the next segment's objective was
-  // staged by beginSegment
-  resumeAfterDecision() {
-    if (this.mode !== 'decision') return;
-    this.mode = 'play';
-    this.controls.enable();
-    if (!IS_TOUCH) this.controls.requestPointerLock();
-    this.beginSegment(this.round.step + 1);
-  }
-
+  // cash out — only available while standing at a checkpoint's route gates
   cashOut() {
-    if (this.mode !== 'decision' || this.round.over) return 0;
+    if (!this.gatePhase || this.round.over) return 0;
     const r = this.round;
     // below-stake rungs cannot be cashed — the UI disables the button too
     if (r.plan.mults[r.step - 1] < 1) return 0;
     r.over = true;
     const payout = r.bet * r.plan.mults[r.step - 1];
+    for (const g of this.gatePhase.gates) this.scene.remove(g);
+    this.gatePhase = null;
     this.mode = 'extract';
     this.controls.disable();
+    if (document.pointerLockElement) document.exitPointerLock?.();
     sound.cash();
     this.cb.onRoundEnd?.({ result: 'cashout', payout, step: r.step, kills: r.kills });
     return payout;
@@ -717,8 +715,12 @@ export class Game {
     const enemyDist = enemyHits.length > 0 ? enemyHits[0].distance : Infinity;
     const destrDist = destrHits.length > 0 ? destrHits[0].distance : Infinity;
 
-    const muzzle = camPos.clone().addScaledVector(dir, 0.6)
-      .add(tmpV.set(dir.z, -0.12, -dir.x).multiplyScalar(0.18));
+    // rounds leave the actual barrel tip of the viewmodel (centered on the
+    // camera when scoped, offset to the right hand when hip-firing)
+    this.camera.updateMatrixWorld();
+    const muzzle = this.camera.localToWorld(
+      this.controls.scoped ? tmpV.set(0.0, -0.07, -0.95) : tmpV.set(0.24, -0.15, -1.0)
+    ).clone();
 
     let end;
     if (enemyDist < wallDist && enemyDist <= destrDist) {
@@ -846,12 +848,7 @@ export class Game {
 
   updatePlayerMovement(dt) {
     const c = this.controls;
-    // touch aim
-    if (IS_TOUCH) {
-      const rate = c.aimRate;
-      c.yaw += rate.yaw * dt;
-      c.pitch = THREE.MathUtils.clamp(c.pitch + rate.pitch * dt, -1.35, 1.35);
-    }
+    // (touch look is applied directly by swipe-drag in controls)
     this.player.yaw = c.yaw;
 
     const yaw = c.yaw;
@@ -1108,7 +1105,7 @@ export class Game {
           if (o.stallT > 6) this.autoResolveObjective();
         } else if (o && o.done) {
           if (r.step >= this.map.segments) this.finishRoundWin();
-          else this.enterDecision();
+          else if (!this.gatePhase) this.enterGatePhase();
         }
       }
     }
@@ -1132,7 +1129,13 @@ export class Game {
     sound.alarm();
   }
 
-  enterDecision() {
+  // ------------------------------------------------------- decision gates
+  //
+  // Reaching a cleared checkpoint spawns two holographic route gates at the
+  // room's exit — walking through one IS the decision. A cash-out banner
+  // shows until a gate is crossed.
+
+  enterGatePhase() {
     const r = this.round;
     r.pot = r.bet * r.plan.mults[r.step - 1];
     this.cb.onPot?.(r.pot, r.pot);
@@ -1146,11 +1149,73 @@ export class Game {
       this.scene.remove(this.objective.beacon);
       this.objective.beacon = null;
     }
-    this.mode = 'decision';
-    this.controls.disable();
-    if (document.pointerLockElement) document.exitPointerLock?.();
+
+    // room exit frame: continuation direction from the room center
+    const S = this.map.cellSize;
+    const roomCell = this.map.rooms[r.step - 1];
+    const roomIdx = this.map.path.findIndex((p) => p.seg === r.step && p.x === roomCell.x && p.z === roomCell.z);
+    const contCell = this.map.path[roomIdx + 1] ?? { x: roomCell.x, z: roomCell.z + 1 };
+    const h = new THREE.Vector3(Math.sign(contCell.x - roomCell.x), 0, Math.sign(contCell.z - roomCell.z));
+    if (h.lengthSq() === 0) h.set(0, 1, 0);
+    const lat = new THREE.Vector3(h.z, 0, -h.x);
+    const mid = new THREE.Vector3(roomCell.x * S + h.x * S, 0, roomCell.z * S + h.z * S);
+
+    const options = this.mission.decisions?.[r.step - 1] ?? [{ t: 'Push forward' }, { t: 'Flank around' }];
+    const gA = makeGate(options[0].t);
+    const gB = makeGate(options[1].t);
+    gA.position.copy(mid).addScaledVector(lat, -1.55);
+    gB.position.copy(mid).addScaledVector(lat, 1.55);
+    const faceYaw = Math.atan2(-h.x, -h.z) + Math.PI;
+    gA.rotation.y = faceYaw;
+    gB.rotation.y = faceYaw;
+    this.scene.add(gA, gB);
+
+    this.gatePhase = { gates: [gA, gB], options, mid, h, lat, t: 0 };
     sound.step();
-    this.cb.onDecision?.(r.step, r.pot);
+    this.cb.onGatePhase?.({
+      step: r.step,
+      pot: r.pot,
+      canCash: r.plan.mults[r.step - 1] >= 1,
+      nextTitle: this.mission.objectives?.[r.step]?.title ?? null
+    });
+  }
+
+  updateGatePhase(dt) {
+    const gp = this.gatePhase;
+    if (!gp) return;
+    gp.t += dt;
+    for (let i = 0; i < gp.gates.length; i++) {
+      const g = gp.gates[i];
+      const text = g.userData.textMesh;
+      if (text) {
+        text.position.y = g.userData.textY + Math.sin(gp.t * 1.7 + i * 1.3) * 0.07;
+        text.material.opacity = 0.82 + Math.sin(gp.t * 3.1 + i) * 0.16;
+      }
+      if (g.userData.frameMat) {
+        g.userData.frameMat.opacity = 0.5 + Math.sin(gp.t * 2.3 + i * 0.7) * 0.2;
+      }
+    }
+    // crossing the gate line makes the call
+    const p = this.player.pos;
+    const d = (p.x - gp.mid.x) * gp.h.x + (p.z - gp.mid.z) * gp.h.z;
+    if (d > 0.35) {
+      const side = (p.x - gp.mid.x) * gp.lat.x + (p.z - gp.mid.z) * gp.lat.z;
+      this.chooseGate(side >= 0 ? 1 : 0);
+    }
+  }
+
+  chooseGate(idx) {
+    const gp = this.gatePhase;
+    if (!gp) return;
+    for (const g of gp.gates) {
+      this.scene.remove(g);
+      g.traverse((o) => { o.material?.map?.dispose?.(); o.material?.dispose?.(); o.geometry?.dispose?.(); });
+    }
+    const choice = gp.options[idx]?.t ?? 'Push forward';
+    this.gatePhase = null;
+    sound.click();
+    this.cb.onGateChoice?.(choice);
+    this.beginSegment(this.round.step + 1);
   }
 
   finishRoundWin() {
@@ -1236,7 +1301,8 @@ export class Game {
         this.player.fragTimer = Math.max(0, this.player.fragTimer - dt);
         this.tryFire(dt);
         this.updateGrenades(dt);
-        this.updatePlayFlow(dt);
+        this.updateGatePhase(dt);
+        if (this.mode === 'play') this.updatePlayFlow(dt);
 
         const r = this.round;
         for (const e of this.enemies) {
@@ -1255,13 +1321,6 @@ export class Game {
           this.viewmodel.position.x += (targetX - this.viewmodel.position.x) * Math.min(1, dt * 10);
           this.viewmodel.position.y += (targetY - this.viewmodel.position.y) * Math.min(1, dt * 10);
         }
-        break;
-      }
-      case 'decision': {
-        for (const e of this.enemies) e.update(dt, enemyCtx);
-        this.updateComrades(dt, false);
-        this.camera.position.set(this.player.pos.x, EYE, this.player.pos.z);
-        this.camera.rotation.set(this.controls.pitch, this.controls.yaw, 0, 'YXZ');
         break;
       }
       case 'dying': {

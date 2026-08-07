@@ -50,17 +50,14 @@
   <!-- mission title typewriter -->
   <div id="mission-title" class="hidden"><span id="mission-title-text"></span><span id="mission-title-caret">▌</span></div>
 
-  <!-- decision overlay -->
-  <div id="decision" class="panel-wrap hidden">
-    <div class="panel decision-panel">
-      <div class="panel-kicker" id="decision-kicker">DECISION POINT 1 / 10</div>
-      <div class="panel-title">Squad is holding. Your call, commander.</div>
-      <div class="decision-secure">SECURED <b id="decision-pot">$0.00</b> — advance for <b id="decision-next">×0.00</b></div>
-      <div id="decision-next-obj" class="hidden">NEXT OBJECTIVE: <b></b></div>
-      <button class="opt" id="decision-a"></button>
-      <button class="opt" id="decision-b"></button>
-      <button class="opt cashout" id="decision-cash">CASH OUT <b id="decision-cash-amt">$0.00</b></button>
+  <!-- checkpoint cash-out banner (route gates are in-world) -->
+  <div id="cash-banner" class="hidden">
+    <div id="cb-info">
+      <label>CHECKPOINT <span id="cb-step">1/10</span> SECURED</label>
+      <b id="cb-amt">$0.00</b>
     </div>
+    <button id="cb-cashout">CASH OUT</button>
+    <div id="cb-hint">…or walk through a route gate to push on</div>
   </div>
 
   <!-- round result -->

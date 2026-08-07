@@ -185,6 +185,87 @@ export function makeCivilian(shirtColor = 0x7a6a4a) {
   return g;
 }
 
+// ------------------------------------------------------- decision gates
+
+// Holographic route gate: a glimmering frame with a floating option label,
+// styled like a modern military HUD projection.
+export function makeGate(text) {
+  const g = new THREE.Group();
+  const accent = 0x7dffa0;
+
+  const frameMat = new THREE.MeshBasicMaterial({
+    color: accent, transparent: true, opacity: 0.55, depthWrite: false
+  });
+  const postL = new THREE.Mesh(new THREE.BoxGeometry(0.06, 2.45, 0.06), frameMat);
+  postL.position.set(-1.32, 1.22, 0);
+  const postR = postL.clone();
+  postR.position.x = 1.32;
+  const topBar = new THREE.Mesh(new THREE.BoxGeometry(2.7, 0.055, 0.055), frameMat);
+  topBar.position.y = 2.45;
+  const ring = new THREE.Mesh(
+    new THREE.RingGeometry(1.05, 1.3, 26),
+    new THREE.MeshBasicMaterial({ color: accent, transparent: true, opacity: 0.3, side: THREE.DoubleSide, depthWrite: false })
+  );
+  ring.rotation.x = -Math.PI / 2;
+  ring.position.y = 0.05;
+  g.add(postL, postR, topBar, ring);
+
+  // floating label, drawn to canvas
+  const c = document.createElement('canvas');
+  c.width = 512; c.height = 144;
+  const ctx = c.getContext('2d');
+  ctx.clearRect(0, 0, 512, 144);
+  // translucent backing plate with cut corners
+  ctx.fillStyle = 'rgba(6, 14, 10, 0.72)';
+  ctx.beginPath();
+  ctx.moveTo(26, 22); ctx.lineTo(486, 22); ctx.lineTo(500, 36); ctx.lineTo(500, 108);
+  ctx.lineTo(486, 122); ctx.lineTo(26, 122); ctx.lineTo(12, 108); ctx.lineTo(12, 36);
+  ctx.closePath();
+  ctx.fill();
+  ctx.strokeStyle = 'rgba(125, 255, 160, 0.9)';
+  ctx.lineWidth = 2.5;
+  ctx.stroke();
+  // corner brackets
+  ctx.lineWidth = 4;
+  for (const [x, sx] of [[6, 1], [506, -1]]) {
+    ctx.beginPath();
+    ctx.moveTo(x + sx * 22, 12); ctx.lineTo(x, 12); ctx.lineTo(x, 34);
+    ctx.moveTo(x + sx * 22, 132); ctx.lineTo(x, 132); ctx.lineTo(x, 110);
+    ctx.stroke();
+  }
+  // caption + option text with glow
+  ctx.textAlign = 'center';
+  ctx.fillStyle = 'rgba(143, 160, 152, 0.95)';
+  ctx.font = '600 17px monospace';
+  ctx.fillText('◤ ROUTE OPTION ◥', 256, 46);
+  const label = text.toUpperCase();
+  let size = 40;
+  ctx.font = `700 ${size}px monospace`;
+  while (ctx.measureText(label).width > 440 && size > 20) {
+    size -= 2;
+    ctx.font = `700 ${size}px monospace`;
+  }
+  ctx.shadowColor = 'rgba(125, 255, 160, 0.95)';
+  ctx.shadowBlur = 16;
+  ctx.fillStyle = '#d6ffe2';
+  ctx.fillText(label, 256, 96);
+  ctx.shadowBlur = 0;
+
+  const tex = new THREE.CanvasTexture(c);
+  const textMesh = new THREE.Mesh(
+    new THREE.PlaneGeometry(3.1, 0.87),
+    new THREE.MeshBasicMaterial({
+      map: tex, transparent: true, opacity: 0.92,
+      side: THREE.DoubleSide, depthWrite: false
+    })
+  );
+  textMesh.position.y = 1.9;
+  g.add(textMesh);
+
+  g.userData = { textMesh, textY: 1.9, frameMat };
+  return g;
+}
+
 // ------------------------------------------------------- objective props
 
 // Destructible / interactable objective targets.

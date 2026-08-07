@@ -161,7 +161,7 @@ game.cb.onDismount = () => {
   ui.showHud(true);
   ui.typewriterTitle(`${mission.subtype.toUpperCase()} — ${mission.location.name.toUpperCase()}`);
   if (!IS_TOUCH) ui.flashMsg('CLICK TO TAKE CONTROL — WASD MOVE · RMB SCOPE · SPACE FRAG', 4200);
-  else ui.flashMsg('LEFT: AIM (2× TAP = SCOPE) · RIGHT: MOVE', 4200);
+  else ui.flashMsg('LEFT STICK: MOVE · SWIPE: LOOK · 2× TAP: SCOPE', 4200);
 };
 
 game.cb.onSegmentStart = (step) => {
@@ -175,31 +175,26 @@ game.cb.onAmmo = (a, reloading) => ui.setAmmo(a, reloading);
 game.cb.onHealth = (h) => ui.setHealth(h);
 game.cb.onScope = (v) => ui.setScoped(v);
 
-game.cb.onDecision = (step, pot) => {
-  const flavor = mission.decisions[step - 1] ?? [{ t: 'Push forward' }, { t: 'Flank around' }];
-  const nextObjective = mission.objectives[step]; // objective of the segment ahead
-  ui.showDecision({
+game.cb.onGatePhase = ({ step, pot, canCash }) => {
+  ui.showCashBanner({
     step,
     maxSteps: mission.steps,
     pot,
+    canCash,
     nextMult: game.round.plan.mults[step], // multiplier if the next step survives
-    optionA: flavor[0].t,
-    optionB: flavor[1].t,
-    cashAmount: pot,
-    canCash: game.round.plan.mults[step - 1] >= 1,
-    nextTitle: nextObjective?.title
-  }, {
-    onContinue: (which) => {
-      sound.click();
-      const chosen = which === 'a' ? flavor[0] : flavor[1];
-      ui.flashMsg(`ROGER — ${chosen.t.toUpperCase()}`);
-      game.resumeAfterDecision();
-    },
-    onCashOut: () => {
-      game.cashOut(); // fires onRoundEnd
-    }
-  });
+    isTouch: IS_TOUCH
+  }, () => game.cashOut());
 };
+
+game.cb.onGateChoice = (choice) => {
+  ui.hideCashBanner();
+  ui.flashMsg(`ROGER — ${choice.toUpperCase()}`);
+};
+
+// desktop: pointer stays locked at the gates, so cash out on [C]
+document.addEventListener('keydown', (e) => {
+  if (e.code === 'KeyC' && game.gatePhase) game.cashOut();
+});
 
 game.cb.onObjective = (o) => ui.setObjective(o.title);
 game.cb.onObjectiveTick = (detail, warn) => ui.setObjectiveDetail(detail, warn);
@@ -212,6 +207,7 @@ game.cb.onAssetSecured = () => ui.flashMsg('ASSET SECURED');
 
 game.cb.onRoundEnd = ({ result, payout, step, kills }) => {
   if (payout > 0) wallet.credit(payout);
+  ui.hideCashBanner();
   setTimeout(() => {
     ui.fade(true);
     setTimeout(() => {

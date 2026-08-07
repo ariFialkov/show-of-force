@@ -10,10 +10,8 @@ export const els = {
   kills: $('hud-kills'), ammo: $('hud-ammo'), msg: $('hud-msg'), crosshair: $('crosshair'),
   scope: $('scope-overlay'), damage: $('damage-flash'), fade: $('fade'),
   title: $('mission-title'), titleText: $('mission-title-text'),
-  decision: $('decision'), decisionKicker: $('decision-kicker'),
-  decisionPot: $('decision-pot'), decisionNext: $('decision-next'),
-  decisionA: $('decision-a'), decisionB: $('decision-b'),
-  decisionCash: $('decision-cash'), decisionCashAmt: $('decision-cash-amt'),
+  cashBanner: $('cash-banner'), cbStep: $('cb-step'), cbAmt: $('cb-amt'),
+  cbCashout: $('cb-cashout'), cbHint: $('cb-hint'),
   result: $('result'), resultHeadline: $('result-headline'), resultSub: $('result-sub'),
   resultPayout: $('result-payout'), resultStats: $('result-stats'), resultContinue: $('result-continue'),
   lobby: $('lobby'), lobbyId: $('lobby-id'), lobbyOp: $('lobby-op'),
@@ -123,33 +121,27 @@ export function typewriterTitle(text, done) {
 
 // ---------------------------------------------------------- decision UI
 
-export function showDecision({ step, maxSteps, pot, nextMult, optionA, optionB, cashAmount, canCash, nextTitle }, handlers) {
-  els.decisionKicker.textContent = `DECISION POINT ${step} / ${maxSteps}`;
-  els.decisionPot.textContent = fmtMoney(pot);
-  els.decisionNext.textContent = fmtMult(nextMult);
-  const nextObj = document.getElementById('decision-next-obj');
-  nextObj.classList.toggle('hidden', !nextTitle);
-  if (nextTitle) nextObj.querySelector('b').textContent = nextTitle.toUpperCase();
-  els.decisionA.textContent = `▸ ${optionA}`;
-  els.decisionB.textContent = `▸ ${optionB}`;
-  els.decisionA.onclick = () => { hideDecision(); handlers.onContinue('a'); };
-  els.decisionB.onclick = () => { hideDecision(); handlers.onContinue('b'); };
+// Non-blocking checkpoint banner: cash out here, or walk a route gate.
+export function showCashBanner({ step, maxSteps, pot, canCash, nextMult, isTouch }, onCashOut) {
+  els.cbStep.textContent = `${step}/${maxSteps}`;
+  els.cbAmt.textContent = fmtMoney(pot);
   if (canCash) {
-    els.decisionCash.disabled = false;
-    els.decisionCash.childNodes[0].textContent = 'CASH OUT ';
-    els.decisionCashAmt.textContent = fmtMoney(cashAmount);
-    els.decisionCash.onclick = () => { hideDecision(); handlers.onCashOut(); };
+    els.cbCashout.disabled = false;
+    els.cbCashout.textContent = isTouch ? `CASH OUT ${fmtMoney(pot)}` : `[C] CASH OUT ${fmtMoney(pot)}`;
+    els.cbCashout.onclick = () => onCashOut();
   } else {
-    els.decisionCash.disabled = true;
-    els.decisionCash.childNodes[0].textContent = 'CASH OUT LOCKED — BELOW STAKE ';
-    els.decisionCashAmt.textContent = fmtMoney(cashAmount);
-    els.decisionCash.onclick = null;
+    els.cbCashout.disabled = true;
+    els.cbCashout.textContent = 'CASH OUT LOCKED — BELOW STAKE';
+    els.cbCashout.onclick = null;
   }
-  els.decision.classList.remove('hidden');
+  els.cbHint.textContent = nextMult
+    ? `…or walk a route gate to push for ${fmtMult(nextMult)}`
+    : '…or walk through a route gate to push on';
+  els.cashBanner.classList.remove('hidden');
 }
 
-export function hideDecision() {
-  els.decision.classList.add('hidden');
+export function hideCashBanner() {
+  els.cashBanner.classList.add('hidden');
 }
 
 // ------------------------------------------------------------ result UI
