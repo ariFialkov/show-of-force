@@ -10,51 +10,132 @@ function box(w, h, d, color) {
   return m;
 }
 
+// ------------------------------------------------------------ blob shadow
+
+let blobTexture = null;
+function getBlobTexture() {
+  if (blobTexture) return blobTexture;
+  const c = document.createElement('canvas');
+  c.width = c.height = 64;
+  const ctx = c.getContext('2d');
+  const grad = ctx.createRadialGradient(32, 32, 4, 32, 32, 30);
+  grad.addColorStop(0, 'rgba(0,0,0,0.42)');
+  grad.addColorStop(1, 'rgba(0,0,0,0)');
+  ctx.fillStyle = grad;
+  ctx.fillRect(0, 0, 64, 64);
+  blobTexture = new THREE.CanvasTexture(c);
+  return blobTexture;
+}
+
+export function makeBlobShadow(radius = 0.55) {
+  const m = new THREE.Mesh(
+    new THREE.PlaneGeometry(radius * 2, radius * 2),
+    new THREE.MeshBasicMaterial({ map: getBlobTexture(), transparent: true, depthWrite: false })
+  );
+  m.rotation.x = -Math.PI / 2;
+  m.position.y = 0.02;
+  m.renderOrder = 1;
+  return m;
+}
+
 // ---------------------------------------------------------------- soldiers
 
 export function makeSoldier(camo) {
   const g = new THREE.Group();
+  const dark = (c, f = 0.72) => new THREE.Color(c).multiplyScalar(f).getHex();
 
-  const legL = box(0.16, 0.5, 0.18, camo.cloth);
+  // legs (pivot at hip for walk anim) with boots
+  const legL = new THREE.Group();
+  const thighL = box(0.15, 0.34, 0.17, camo.cloth);
+  thighL.position.y = -0.17;
+  const shinL = box(0.13, 0.16, 0.15, dark(camo.cloth, 0.85));
+  shinL.position.y = -0.42;
+  const bootL = box(0.15, 0.09, 0.24, 0x191a17);
+  bootL.position.set(0, -0.53, 0.03);
+  legL.add(thighL, shinL, bootL);
+  legL.position.set(-0.11, 0.56, 0);
   const legR = legL.clone();
-  legL.position.set(-0.11, 0.25, 0);
-  legR.position.set(0.11, 0.25, 0);
-  // pivot legs at hip for walk anim
-  legL.geometry = legL.geometry.clone(); legL.geometry.translate(0, -0.25, 0); legL.position.y = 0.5;
-  legR.geometry = legR.geometry.clone(); legR.geometry.translate(0, -0.25, 0); legR.position.y = 0.5;
+  legR.position.x = 0.11;
 
-  const torso = box(0.44, 0.52, 0.26, camo.cloth);
-  torso.position.y = 0.76;
-  const vest = box(0.5, 0.34, 0.32, camo.vest);
-  vest.position.y = 0.8;
+  // torso: shirt + plate carrier + pouches + belt + backpack
+  const torso = box(0.42, 0.5, 0.24, camo.cloth);
+  torso.position.y = 0.8;
+  const vest = box(0.46, 0.32, 0.3, camo.vest);
+  vest.position.y = 0.84;
+  const pouchRow = new THREE.Group();
+  for (let i = -1; i <= 1; i++) {
+    const p = box(0.1, 0.1, 0.05, dark(camo.vest, 0.8));
+    p.position.set(i * 0.13, 0.72, 0.17);
+    pouchRow.add(p);
+  }
+  const belt = box(0.44, 0.06, 0.26, 0x24231c);
+  belt.position.y = 0.57;
+  const pack = box(0.34, 0.36, 0.14, dark(camo.cloth, 0.8));
+  pack.position.set(0, 0.86, -0.2);
+  const shoulderL = box(0.14, 0.07, 0.2, camo.vest);
+  shoulderL.position.set(-0.26, 1.03, 0);
+  const shoulderR = shoulderL.clone();
+  shoulderR.position.x = 0.26;
 
-  const head = box(0.22, 0.22, 0.22, camo.skin);
-  head.position.y = 1.14;
-  const helmet = box(0.28, 0.14, 0.28, camo.helmet);
-  helmet.position.y = 1.25;
+  // head: face + goggle strip + rounded helmet with brim
+  const head = box(0.2, 0.2, 0.2, camo.skin);
+  head.position.y = 1.16;
+  const goggles = box(0.21, 0.055, 0.21, 0x14161a);
+  goggles.position.set(0, 1.19, 0.005);
+  const helmet = new THREE.Mesh(
+    new THREE.SphereGeometry(0.155, 10, 7, 0, Math.PI * 2, 0, Math.PI / 1.9),
+    new THREE.MeshLambertMaterial({ color: camo.helmet })
+  );
+  helmet.position.y = 1.235;
+  helmet.scale.set(1, 0.85, 1.06);
+  const brim = box(0.24, 0.03, 0.26, camo.helmet);
+  brim.position.y = 1.245;
 
-  const armL = box(0.13, 0.42, 0.15, camo.cloth);
-  armL.geometry.translate(0, -0.18, 0);
-  armL.position.set(-0.29, 0.98, 0);
+  // arms
+  const armL = new THREE.Group();
+  const upperL = box(0.12, 0.24, 0.14, camo.cloth);
+  upperL.position.y = -0.1;
+  const foreL = box(0.1, 0.18, 0.12, dark(camo.cloth, 0.85));
+  foreL.position.y = -0.3;
+  const gloveL = box(0.09, 0.07, 0.1, 0x1e1d19);
+  gloveL.position.y = -0.41;
+  armL.add(upperL, foreL, gloveL);
+  armL.position.set(-0.28, 1.0, 0);
   const armR = armL.clone();
-  armR.position.x = 0.29;
+  armR.position.x = 0.28;
 
-  // rifle held forward
+  // rifle: receiver + barrel + suppressor + foregrip + mag + stock + optic
   const rifle = new THREE.Group();
-  const body = box(0.06, 0.09, 0.62, 0x14161a);
-  const magazine = box(0.05, 0.14, 0.08, 0x1c1f24);
-  magazine.position.set(0, -0.1, 0.02);
-  const stock = box(0.05, 0.1, 0.16, 0x22262c);
-  stock.position.set(0, -0.01, -0.34);
-  rifle.add(body, magazine, stock);
-  rifle.position.set(0.12, 0.92, 0.3);
+  const receiver = box(0.055, 0.08, 0.42, 0x14161a);
+  const barrel = new THREE.Mesh(new THREE.CylinderGeometry(0.016, 0.016, 0.3, 6), new THREE.MeshLambertMaterial({ color: 0x101215 }));
+  barrel.rotation.x = Math.PI / 2;
+  barrel.position.set(0, 0.01, 0.33);
+  const suppressor = new THREE.Mesh(new THREE.CylinderGeometry(0.026, 0.026, 0.12, 6), new THREE.MeshLambertMaterial({ color: 0x0c0e10 }));
+  suppressor.rotation.x = Math.PI / 2;
+  suppressor.position.set(0, 0.01, 0.52);
+  const magazine = box(0.045, 0.13, 0.07, 0x1c1f24);
+  magazine.position.set(0, -0.1, 0.06);
+  magazine.rotation.x = 0.18;
+  const grip = box(0.04, 0.09, 0.05, 0x1c1f24);
+  grip.position.set(0, -0.08, -0.12);
+  const foregrip = box(0.035, 0.07, 0.04, 0x1c1f24);
+  foregrip.position.set(0, -0.06, 0.22);
+  const stock = box(0.045, 0.09, 0.16, 0x22262c);
+  stock.position.set(0, -0.005, -0.3);
+  const optic = box(0.035, 0.05, 0.1, 0x0e1013);
+  optic.position.set(0, 0.065, 0.02);
+  rifle.add(receiver, barrel, suppressor, magazine, grip, foregrip, stock, optic);
+  rifle.position.set(0.12, 0.94, 0.3);
   rifle.rotation.x = -0.06;
 
-  g.add(legL, legR, torso, vest, head, helmet, armL, armR, rifle);
+  const shadow = makeBlobShadow(0.5);
+
+  g.add(legL, legR, torso, vest, pouchRow, belt, pack, shoulderL, shoulderR,
+    head, goggles, helmet, brim, armL, armR, rifle, shadow);
 
   // muzzle tip in soldier-local space (for tracer origins)
   const muzzle = new THREE.Object3D();
-  muzzle.position.set(0.12, 0.9, 0.65);
+  muzzle.position.set(0.12, 0.92, 0.88);
   g.add(muzzle);
 
   g.userData.parts = { legL, legR, armL, armR, torso, head, rifle, muzzle };
@@ -62,6 +143,157 @@ export function makeSoldier(camo) {
   // scale to human height (~1.75m) so soldiers stand eye-to-eye with the
   // first-person camera
   g.scale.setScalar(1.32);
+  return g;
+}
+
+// Unarmed civilian / asset for escort objectives.
+export function makeCivilian(shirtColor = 0x7a6a4a) {
+  const g = new THREE.Group();
+  const legL = new THREE.Group();
+  const thigh = box(0.14, 0.34, 0.16, 0x33383e);
+  thigh.position.y = -0.17;
+  const shin = box(0.12, 0.18, 0.13, 0x2b2f34);
+  shin.position.y = -0.43;
+  const shoe = box(0.13, 0.07, 0.2, 0x1c1c1a);
+  shoe.position.set(0, -0.54, 0.02);
+  legL.add(thigh, shin, shoe);
+  legL.position.set(-0.1, 0.56, 0);
+  const legR = legL.clone();
+  legR.position.x = 0.1;
+  const torso = box(0.4, 0.5, 0.22, shirtColor);
+  torso.position.y = 0.8;
+  const head = box(0.19, 0.2, 0.19, 0xc9a06c);
+  head.position.y = 1.16;
+  const hair = box(0.2, 0.07, 0.2, 0x2c2420);
+  hair.position.y = 1.28;
+  const armL = new THREE.Group();
+  const upper = box(0.11, 0.24, 0.13, shirtColor);
+  upper.position.y = -0.1;
+  const fore = box(0.09, 0.18, 0.11, 0xc9a06c);
+  fore.position.y = -0.3;
+  armL.add(upper, fore);
+  armL.position.set(-0.26, 1.0, 0);
+  const armR = armL.clone();
+  armR.position.x = 0.26;
+  g.add(legL, legR, torso, head, hair, armL, armR, makeBlobShadow(0.45));
+  const muzzle = new THREE.Object3D();
+  muzzle.position.set(0, 0.9, 0.4);
+  g.add(muzzle);
+  g.userData.parts = { legL, legR, armL, armR, torso, head, rifle: new THREE.Group(), muzzle };
+  g.traverse((o) => { o.userData.soldierRoot = g; });
+  g.scale.setScalar(1.3);
+  return g;
+}
+
+// ------------------------------------------------------- objective props
+
+// Destructible / interactable objective targets.
+export function makeObjectiveProp(kind) {
+  const g = new THREE.Group();
+  switch (kind) {
+    case 'cache': {
+      const crate = (x, y, z, w = 1.1) => {
+        const c = box(w, 0.7, 0.8, 0x5d4f30);
+        c.position.set(x, y, z);
+        c.rotation.y = (x + z) * 0.4;
+        return c;
+      };
+      g.add(crate(0, 0.35, 0), crate(0.9, 0.35, 0.3), crate(-0.7, 0.35, 0.5), crate(0.2, 1.02, 0.2));
+      const tin = box(0.5, 0.3, 0.32, 0x3d4a35);
+      tin.position.set(-0.6, 0.86, 0.4);
+      g.add(tin);
+      break;
+    }
+    case 'comms': {
+      const mast = new THREE.Mesh(new THREE.CylinderGeometry(0.06, 0.09, 5.4, 6), new THREE.MeshLambertMaterial({ color: 0x4a4f55 }));
+      mast.position.y = 2.7;
+      const dish = new THREE.Mesh(new THREE.SphereGeometry(0.55, 10, 7, 0, Math.PI), new THREE.MeshLambertMaterial({ color: 0x9aa2a8, side: THREE.DoubleSide }));
+      dish.position.set(0.3, 4.3, 0);
+      dish.rotation.z = -Math.PI / 2.4;
+      const radio = box(1.0, 0.9, 0.7, 0x3a4046);
+      radio.position.set(0.2, 0.45, 0.5);
+      const cable = box(0.05, 0.05, 1.1, 0x22262a);
+      cable.position.set(0.1, 0.06, 0);
+      g.add(mast, dish, radio, cable);
+      break;
+    }
+    case 'generator': {
+      const body = box(1.7, 1.05, 0.95, 0x3d5238);
+      body.position.y = 0.55;
+      const tank = new THREE.Mesh(new THREE.CylinderGeometry(0.3, 0.3, 1.5, 10), new THREE.MeshLambertMaterial({ color: 0x2f4029 }));
+      tank.rotation.z = Math.PI / 2;
+      tank.position.y = 1.3;
+      const pipe = new THREE.Mesh(new THREE.CylinderGeometry(0.07, 0.07, 0.8, 6), new THREE.MeshLambertMaterial({ color: 0x22262a }));
+      pipe.position.set(0.6, 1.6, 0.2);
+      g.add(body, tank, pipe);
+      break;
+    }
+    case 'aa': {
+      const base = new THREE.Mesh(new THREE.CylinderGeometry(0.9, 1.05, 0.5, 10), new THREE.MeshLambertMaterial({ color: 0x44483c }));
+      base.position.y = 0.25;
+      g.add(base);
+      for (let i = 0; i < 4; i++) {
+        const tube = new THREE.Mesh(new THREE.CylinderGeometry(0.14, 0.14, 1.9, 8), new THREE.MeshLambertMaterial({ color: 0x53584a }));
+        tube.position.set((i % 2 - 0.5) * 0.5, 1.05, (Math.floor(i / 2) - 0.5) * 0.5);
+        tube.rotation.x = -Math.PI / 3.2;
+        g.add(tube);
+      }
+      break;
+    }
+    case 'mortar': {
+      const plate = new THREE.Mesh(new THREE.CylinderGeometry(0.55, 0.6, 0.12, 10), new THREE.MeshLambertMaterial({ color: 0x3a3d35 }));
+      plate.position.y = 0.06;
+      const tube = new THREE.Mesh(new THREE.CylinderGeometry(0.12, 0.13, 1.3, 8), new THREE.MeshLambertMaterial({ color: 0x4a4e42 }));
+      tube.position.set(0, 0.65, -0.15);
+      tube.rotation.x = -0.5;
+      const legA = box(0.06, 0.9, 0.06, 0x33362e);
+      legA.position.set(0.3, 0.45, 0.25);
+      legA.rotation.z = 0.4;
+      const legB = legA.clone();
+      legB.position.x = -0.3;
+      legB.rotation.z = -0.4;
+      const shells = box(0.7, 0.35, 0.5, 0x5d4f30);
+      shells.position.set(0.9, 0.18, 0.3);
+      g.add(plate, tube, legA, legB, shells);
+      break;
+    }
+    case 'console': {
+      const desk = box(1.3, 0.75, 0.7, 0x3c4148);
+      desk.position.y = 0.38;
+      const screen = box(0.7, 0.45, 0.06, 0x14181d);
+      screen.position.set(0, 1.05, -0.2);
+      screen.rotation.x = -0.15;
+      const glow = new THREE.Mesh(
+        new THREE.PlaneGeometry(0.6, 0.35),
+        new THREE.MeshBasicMaterial({ color: 0x6fd6ff })
+      );
+      glow.position.set(0, 1.05, -0.165);
+      glow.rotation.x = -0.15;
+      const keyboard = box(0.5, 0.04, 0.25, 0x22262c);
+      keyboard.position.set(0, 0.78, 0.1);
+      g.add(desk, screen, glow, keyboard);
+      break;
+    }
+    case 'charge': {
+      const stack = box(1.5, 0.9, 0.9, 0x41443c);
+      stack.position.y = 0.45;
+      const stack2 = box(1.0, 0.6, 0.7, 0x35382f);
+      stack2.position.set(0.4, 1.2, 0);
+      const stripe = box(1.52, 0.12, 0.92, 0x8a6a2a);
+      stripe.position.y = 0.6;
+      g.add(stack, stack2, stripe);
+      break;
+    }
+  }
+  g.add(makeBlobShadow(1.3));
+  g.userData.wreck = () => {
+    g.traverse((o) => {
+      if (o.isMesh && !o.material?.map) {
+        o.material = new THREE.MeshLambertMaterial({ color: 0x181614 });
+      }
+    });
+    g.scale.y = Math.max(0.45, g.scale.y * 0.55);
+  };
   return g;
 }
 
@@ -189,11 +421,13 @@ export function makeCar(rng) {
   bumperF.position.set(0, 0.42, 2.0);
   const bumperB = bumperF.clone();
   bumperB.position.z = -2.0;
-  g.add(body, cabin, glass, bumperF, bumperB);
+  g.add(body, cabin, glass, bumperF, bumperB, makeBlobShadow(1.9));
   wheels(g, [[-0.88, 0.34, 1.3], [0.88, 0.34, 1.3], [-0.88, 0.34, -1.3], [0.88, 0.34, -1.3]], 0.34);
   g.userData.wreck = () => {
     g.traverse((o) => {
-      if (o.isMesh) o.material = new THREE.MeshLambertMaterial({ color: 0x181614 });
+      if (o.isMesh && !o.material?.map) {
+        o.material = new THREE.MeshLambertMaterial({ color: 0x181614 });
+      }
     });
     g.scale.y = 0.72;
   };

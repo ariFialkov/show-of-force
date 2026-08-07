@@ -4,6 +4,97 @@ import * as THREE from 'three';
 
 const lambert = (color, opts = {}) => new THREE.MeshLambertMaterial({ color, ...opts });
 
+// --------------------------------------------------- procedural textures
+//
+// Tiny canvas-generated tiling textures give surfaces grain and detail at
+// near-zero memory/GPU cost (a handful of 128px textures per world).
+
+function noiseTexture(hex, { speckle = 0.14, patches = 10, lines = 0 } = {}) {
+  const c = document.createElement('canvas');
+  c.width = c.height = 128;
+  const ctx = c.getContext('2d');
+  const col = new THREE.Color(hex);
+  ctx.fillStyle = `#${col.getHexString()}`;
+  ctx.fillRect(0, 0, 128, 128);
+  // broad tonal patches
+  for (let i = 0; i < patches; i++) {
+    const v = (Math.random() - 0.5) * 0.16;
+    const p = col.clone().offsetHSL(0, 0, v);
+    ctx.fillStyle = `rgba(${p.r * 255 | 0},${p.g * 255 | 0},${p.b * 255 | 0},0.5)`;
+    ctx.beginPath();
+    ctx.ellipse(Math.random() * 128, Math.random() * 128, 18 + Math.random() * 34, 12 + Math.random() * 26, Math.random() * 3, 0, 7);
+    ctx.fill();
+  }
+  // fine speckle
+  for (let i = 0; i < 900; i++) {
+    const v = (Math.random() - 0.5) * speckle;
+    const p = col.clone().offsetHSL(0, 0, v);
+    ctx.fillStyle = `#${p.getHexString()}`;
+    ctx.fillRect(Math.random() * 128, Math.random() * 128, 1.6, 1.6);
+  }
+  // horizontal courses (mud-brick / plank feel)
+  for (let i = 0; i < lines; i++) {
+    const y = (i + 0.5) * (128 / lines);
+    ctx.fillStyle = 'rgba(0,0,0,0.10)';
+    ctx.fillRect(0, y, 128, 1.4);
+  }
+  const tex = new THREE.CanvasTexture(c);
+  tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+  return tex;
+}
+
+function buildingTexture(hex, night) {
+  const c = document.createElement('canvas');
+  c.width = c.height = 128;
+  const ctx = c.getContext('2d');
+  const col = new THREE.Color(hex);
+  ctx.fillStyle = `#${col.getHexString()}`;
+  ctx.fillRect(0, 0, 128, 128);
+  for (let i = 0; i < 500; i++) {
+    const v = (Math.random() - 0.5) * 0.12;
+    ctx.fillStyle = `#${col.clone().offsetHSL(0, 0, v).getHexString()}`;
+    ctx.fillRect(Math.random() * 128, Math.random() * 128, 2, 2);
+  }
+  // window rows
+  for (let row = 0; row < 4; row++) {
+    for (let colI = 0; colI < 4; colI++) {
+      const lit = night && Math.random() < 0.3;
+      ctx.fillStyle = lit ? 'rgba(255,214,140,0.9)' : 'rgba(10,12,14,0.55)';
+      ctx.fillRect(14 + colI * 28, 16 + row * 28, 12, 16);
+    }
+  }
+  const tex = new THREE.CanvasTexture(c);
+  tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+  return tex;
+}
+
+function gradientSkyTexture(topHex, horizonHex) {
+  const c = document.createElement('canvas');
+  c.width = 4;
+  c.height = 128;
+  const ctx = c.getContext('2d');
+  const grad = ctx.createLinearGradient(0, 0, 0, 128);
+  grad.addColorStop(0, '#' + new THREE.Color(topHex).getHexString());
+  grad.addColorStop(0.62, '#' + new THREE.Color(topHex).lerp(new THREE.Color(horizonHex), 0.55).getHexString());
+  grad.addColorStop(1, '#' + new THREE.Color(horizonHex).getHexString());
+  ctx.fillStyle = grad;
+  ctx.fillRect(0, 0, 4, 128);
+  return new THREE.CanvasTexture(c);
+}
+
+function sunTexture() {
+  const c = document.createElement('canvas');
+  c.width = c.height = 128;
+  const ctx = c.getContext('2d');
+  const grad = ctx.createRadialGradient(64, 64, 4, 64, 64, 62);
+  grad.addColorStop(0, 'rgba(255,252,238,1)');
+  grad.addColorStop(0.25, 'rgba(255,240,200,0.85)');
+  grad.addColorStop(1, 'rgba(255,236,190,0)');
+  ctx.fillStyle = grad;
+  ctx.fillRect(0, 0, 128, 128);
+  return new THREE.CanvasTexture(c);
+}
+
 export function buildWorld(scene, map, env, rng) {
   const group = new THREE.Group();
   group.name = 'world';
@@ -17,6 +108,29 @@ export function buildWorld(scene, map, env, rng) {
   sun.position.set(40, 70, 25);
   group.add(hemi, sun);
 
+  // ---- sky dome + sun impostor (fog-immune, so the horizon reads as haze)
+  const skyDome = new THREE.Mesh(
+    new THREE.SphereGeometry(340, 20, 12),
+    new THREE.MeshBasicMaterial({
+      map: gradientSkyTexture(env.sky, env.fog),
+      side: THREE.BackSide,
+      fog: false,
+      depthWrite: false
+    })
+  );
+  skyDome.name = 'skyDome';
+  skyDome.renderOrder = -2;
+  group.add(skyDome);
+  if (!env.night) {
+    const sunSprite = new THREE.Sprite(new THREE.SpriteMaterial({
+      map: sunTexture(), fog: false, transparent: true, depthWrite: false
+    }));
+    sunSprite.scale.setScalar(90);
+    sunSprite.position.set(140, 200, 90);
+    sunSprite.name = 'sunSprite';
+    group.add(sunSprite);
+  }
+
   // ---- ground
   const S = map.cellSize;
   const { minX, maxX, minZ, maxZ } = map.bounds;
@@ -25,7 +139,12 @@ export function buildWorld(scene, map, env, rng) {
   const cx = ((minX + maxX) / 2) * S;
   const cz = ((minZ + maxZ) / 2) * S;
   const groundColor = env.snow ? 0xd8dde2 : env.ground;
-  const ground = new THREE.Mesh(new THREE.PlaneGeometry(spanX, spanZ, 1, 1), lambert(groundColor));
+  const groundTex = noiseTexture(groundColor, { speckle: 0.2, patches: 14 });
+  groundTex.repeat.set(spanX / 11, spanZ / 11);
+  const ground = new THREE.Mesh(
+    new THREE.PlaneGeometry(spanX, spanZ, 1, 1),
+    new THREE.MeshLambertMaterial({ color: 0xffffff, map: groundTex })
+  );
   ground.rotation.x = -Math.PI / 2;
   ground.position.set(cx, 0, cz);
   group.add(ground);
@@ -48,20 +167,39 @@ export function buildWorld(scene, map, env, rng) {
   // ---- walls along carved-cell edges facing uncarved cells
   const wallH = 3.1;
   const wallGeo = new THREE.BoxGeometry(S, wallH, 0.7);
-  const wallMat = lambert(env.wall);
+  const wallTex = noiseTexture(0xffffff, { speckle: 0.1, patches: 8, lines: 5 });
+  const wallMat = new THREE.MeshLambertMaterial({ color: env.wall, map: wallTex });
   const pillarSet = new Set((map.pillars ?? []).map((p) => `${p.x},${p.z}`));
   const edges = collectWallEdges(map, pillarSet);
   const walls = new THREE.InstancedMesh(wallGeo, wallMat, edges.length);
+  const wallTint = new THREE.Color();
   edges.forEach((e, i) => {
     dummy.position.set(e.x, wallH / 2, e.z);
     dummy.rotation.set(0, e.rotY, 0);
     // vary height a touch so skylines aren't perfectly flat
-    const s = 0.85 + ((e.x * 7 + e.z * 13) % 10) / 33;
+    const n = ((e.x * 7 + e.z * 13) % 10 + 10) % 10;
+    const s = 0.85 + n / 33;
     dummy.scale.set(1.02, s, 1);
     dummy.updateMatrix();
     walls.setMatrixAt(i, dummy.matrix);
+    // subtle per-segment tint variation breaks up the uniformity
+    walls.setColorAt(i, wallTint.set(0xffffff).offsetHSL(0, 0, (n - 5) / 90));
   });
-  group.add(walls);
+  if (walls.instanceColor) walls.instanceColor.needsUpdate = true;
+  // a coping lip along the top of every wall segment
+  const copingGeo = new THREE.BoxGeometry(S * 1.04, 0.22, 0.92);
+  const copingMat = lambert(env.wallAlt);
+  const coping = new THREE.InstancedMesh(copingGeo, copingMat, edges.length);
+  edges.forEach((e, i) => {
+    const n = ((e.x * 7 + e.z * 13) % 10 + 10) % 10;
+    const s = 0.85 + n / 33;
+    dummy.position.set(e.x, wallH * s, e.z);
+    dummy.rotation.set(0, e.rotY, 0);
+    dummy.scale.set(1, 1, 1);
+    dummy.updateMatrix();
+    coping.setMatrixAt(i, dummy.matrix);
+  });
+  group.add(walls, coping);
 
   // ---- courtyard pillars: low cover blocks instead of full walls
   if (pillarSet.size > 0) {
@@ -81,8 +219,8 @@ export function buildWorld(scene, map, env, rng) {
   buildWatchtowers(group, map, env, rng);
 
   // ---- buildings / skyline beyond the walls, clustered into blocks
-  const buildingMat = lambert(env.building);
-  const buildingMatAlt = lambert(env.wallAlt);
+  const buildingMat = new THREE.MeshLambertMaterial({ color: 0xffffff, map: buildingTexture(env.building, env.night) });
+  const buildingMatAlt = new THREE.MeshLambertMaterial({ color: 0xffffff, map: buildingTexture(env.wallAlt, env.night) });
   const anchors = pickBuildingCells(map, rng, 60);
   for (const b of anchors) {
     const cluster = rng.int(1, 3);

@@ -12,7 +12,7 @@ import { generateMap } from './mapgen.js';
 import { buildWorld } from './world.js';
 import { Effects, sound } from './effects.js';
 import { EnemyBot, Comrade } from './bots.js';
-import { makeVehicle, makeCar } from './models.js';
+import { makeVehicle, makeCar, makeCivilian, makeObjectiveProp } from './models.js';
 import { Controls, IS_TOUCH } from './controls.js';
 import { makeRng } from '../rng.js';
 
@@ -36,6 +36,8 @@ export class Game {
     this.canvas = canvas;
     this.renderer = new THREE.WebGLRenderer({ canvas, antialias: true, powerPreference: 'high-performance' });
     this.renderer.setPixelRatio(Math.min(devicePixelRatio || 1, 2));
+    this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
+    this.renderer.toneMappingExposure = 1.08;
     this.scene = new THREE.Scene();
     this.camera = new THREE.PerspectiveCamera(BASE_FOV, 1, 0.1, 400);
     this.effects = new Effects(this.scene);
@@ -94,7 +96,7 @@ export class Game {
     this.disposeWorld();
     this.mission = mission;
     const rng = makeRng(mission.seed ^ 0x5f3759df);
-    this.map = generateMap(rng);
+    this.map = generateMap(rng, { segments: mission.steps ?? 8 });
     const S = this.map.cellSize;
     this.routePts = this.map.route.map((c) => new THREE.Vector3(c.x * S, 0, c.z * S));
     this.pillarSet = new Set((this.map.pillars ?? []).map((p) => `${p.x},${p.z}`));
@@ -145,6 +147,9 @@ export class Game {
     this.grenades = [];
     for (const d of this.destructibles) this.scene.remove(d.group);
     this.destructibles = [];
+    if (this.npc) { this.npc.dispose(); this.npc = null; }
+    if (this.objective?.beacon) this.scene.remove(this.objective.beacon);
+    this.objective = null;
     if (this.vehicle) { this.scene.remove(this.vehicle); this.vehicle = null; }
     if (this.viewmodel) { this.camera.remove(this.viewmodel); }
     this.effects.clear();
@@ -338,11 +343,229 @@ export class Game {
     r.segTime = 0;
     r.segKills = 0;
     r.lethal = r.plan.bustStep === step;
+    this.setupObjective(step);
     const segEnemies = this.enemies.filter((e) => e.seg === step && e.alive);
     r.segEnemyTotal = segEnemies.length;
     for (const e of segEnemies) e.engageDelay = 0.7 + Math.random() * 1.2;
     if (!first) sound.step();
     this.cb.onSegmentStart?.(step, r.lethal);
+    this.cb.onObjective?.(this.objective);
+  }
+
+  // ------------------------------------------------------- objectives
+
+  segSiteInfo(step) {
+    const S = this.map.cellSize;
+    const cells = this.map.path.filter((p) =>
+      p.seg === step &&
+      !this.map.rooms.some((rm) => Math.abs(rm.x - p.x) <= 1 && Math.abs(rm.z - p.z) <= 1));
+    if (cells.length < 2) return null;
+    const idx = Math.min(cells.length - 2, Math.floor(cells.length * 0.6));
+    const cell = cells[idx];
+    const nxt = cells[idx + 1] ?? cell;
+    const yaw = Math.atan2(nxt.x - cell.x, nxt.z - cell.z);
+    return {
+      pos: new THREE.Vector3(cell.x * S, 0, cell.z * S),
+      yaw,
+      fwd: new THREE.Vector3(Math.sin(yaw), 0, Math.cos(yaw)),
+      lat: new THREE.Vector3(Math.cos(yaw), 0, -Math.sin(yaw))
+    };
+  }
+
+  spawnGuards(step, pos, offsets) {
+    for (const [dx, dz] of offsets) {
+      this.enemies.push(new EnemyBot(
+        this.scene, new THREE.Vector3(pos.x + dx, 0, pos.z + dz), null, step));
+    }
+  }
+
+  setupObjective(step) {
+    const spec = this.mission.objectives?.[step - 1] ?? { mech: 'sweep', title: 'Clear the route', prop: null };
+    const o = this.objective = {
+      mech: spec.mech, title: spec.title, prop: spec.prop,
+      done: false, progress: 0, detectT: 0, compromised: false, seen: false,
+      holdT: 0, holdNeeded: 11, wavesSpawned: 0, stallT: 0, hintT: 0,
+      timer: null, overdue: false, sitePos: null, hvtId: null,
+      destructible: null, beacon: null
+    };
+    const site = this.segSiteInfo(step);
+    const pick = (arr) => arr[Math.floor(Math.random() * arr.length)];
+
+    switch (o.mech) {
+      case 'stealth': {
+        for (const e of this.enemies) {
+          if (e.seg === step && e.alive) e.stealthMode = true;
+        }
+        break;
+      }
+      case 'destroy': {
+        if (!site) break;
+        const kind = o.prop ?? 'cache';
+        const prop = kind === 'car' ? makeCar({ pick }) : makeObjectiveProp(kind);
+        prop.position.copy(site.pos);
+        prop.rotation.y = site.yaw + (Math.random() - 0.5) * 0.8;
+        this.scene.add(prop);
+        const d = { kind, group: prop, hp: 7, alive: true, pos: site.pos.clone() };
+        prop.userData.destructibleRef = d;
+        this.destructibles.push(d);
+        o.destructible = d;
+        this.spawnGuards(step, site.pos, [[2.2, 1.6], [-2.0, -1.4]]);
+        break;
+      }
+      case 'hvt': {
+        // promote a mid-segment enemy (or spawn one) into the marked target
+        let hvt = this.enemies.find((e) => e.seg === step && e.alive && !e.elevated);
+        if (!hvt && site) {
+          hvt = new EnemyBot(this.scene, site.pos.clone(), null, step);
+          this.enemies.push(hvt);
+        }
+        if (hvt) {
+          hvt.isHVT = true;
+          hvt.hp = 3;
+          const band = new THREE.Mesh(
+            new THREE.BoxGeometry(0.5, 0.1, 0.34),
+            new THREE.MeshBasicMaterial({ color: 0xff4a3a })
+          );
+          band.position.y = 1.02;
+          hvt.group.add(band);
+          o.hvtId = hvt.id;
+        }
+        break;
+      }
+      case 'interact': {
+        if (!site) break;
+        const prop = makeObjectiveProp(o.prop === 'charge' ? 'charge' : 'console');
+        prop.position.copy(site.pos);
+        prop.rotation.y = site.yaw + Math.PI;
+        this.scene.add(prop);
+        // charges leave something to blow once planted
+        if (o.prop === 'charge') {
+          const d = { kind: 'charge', group: prop, hp: 99, alive: true, pos: site.pos.clone() };
+          prop.userData.destructibleRef = d;
+          this.destructibles.push(d);
+          o.destructible = d;
+        } else {
+          o.consoleProp = prop;
+        }
+        const beacon = new THREE.Mesh(
+          new THREE.RingGeometry(1.6, 1.95, 24),
+          new THREE.MeshBasicMaterial({ color: 0x7dffa0, side: THREE.DoubleSide, transparent: true, opacity: 0.55 })
+        );
+        beacon.rotation.x = -Math.PI / 2;
+        beacon.position.copy(site.pos).setY(0.06);
+        this.scene.add(beacon);
+        o.beacon = beacon;
+        o.sitePos = site.pos.clone();
+        this.spawnGuards(step, site.pos, [[2.4, -1.6], [-2.2, 1.8]]);
+        break;
+      }
+      case 'hold': {
+        // the checkpoint room is the hold zone; stage cover + attack waves
+        const room = this.currentRoomCenterFor(step);
+        if (room) {
+          const grp = new THREE.Group();
+          const mat = new THREE.MeshLambertMaterial({ color: 0x6e5c3a });
+          for (const [dx, dz] of [[-2.2, 0], [2.2, 0], [0, -2.2]]) {
+            const crate = new THREE.Mesh(new THREE.BoxGeometry(1.5, 1.05, 0.85), mat);
+            crate.position.set(room.x + dx, 0.53, room.z + dz);
+            crate.rotation.y = Math.atan2(dx, dz);
+            grp.add(crate);
+          }
+          this.scene.add(grp);
+          const d = { kind: 'post', group: grp, hp: 8, alive: true, pos: room.clone() };
+          grp.userData.destructibleRef = d;
+          this.destructibles.push(d);
+        }
+        break;
+      }
+      case 'timed': {
+        const segLen = this.map.path.filter((p) => p.seg === step).length;
+        o.timer = segLen * this.map.cellSize / 3.2 + 15;
+        break;
+      }
+      case 'escort': {
+        if (!site) break;
+        const civ = new Comrade(this.scene, this.mission.team.camo, { callsign: 'Asset' },
+          makeCivilian([0x7a5a6a, 0x5a6a7a, 0x7a6a4a][step % 3]));
+        civ.setPosition(site.pos.clone(), site.yaw);
+        this.npc = civ;
+        this.npcActive = false;
+        o.sitePos = site.pos.clone();
+        break;
+      }
+    }
+  }
+
+  currentRoomCenterFor(step) {
+    const room = this.map.rooms[step - 1];
+    if (!room) return null;
+    const S = this.map.cellSize;
+    return new THREE.Vector3(room.x * S, 0, room.z * S);
+  }
+
+  compromiseStealth() {
+    const o = this.objective;
+    if (!o || o.compromised) return;
+    o.compromised = true;
+    for (const e of this.enemies) {
+      if (e.seg === this.round.step && e.alive) {
+        e.stealthMode = false;
+        e.engage();
+      }
+    }
+    sound.alarm();
+    this.cb.onCompromised?.();
+  }
+
+  autoResolveObjective() {
+    const o = this.objective;
+    if (!o || o.done) return;
+    switch (o.mech) {
+      case 'sweep': {
+        for (const e of this.enemies) {
+          if (e.seg === this.round.step && e.alive) {
+            e.takeHit(this.effects);
+            e.takeHit(this.effects);
+            if (!e.alive) this.registerKill(e, 'comrade');
+          }
+        }
+        break;
+      }
+      case 'destroy': {
+        if (o.destructible?.alive) this.destroyDestructible(o.destructible, 'comrade');
+        break;
+      }
+      case 'hvt': {
+        const hvt = this.enemies.find((e) => e.id === o.hvtId);
+        if (hvt?.alive) {
+          hvt.takeHit(this.effects);
+          hvt.takeHit(this.effects);
+          hvt.takeHit(this.effects);
+          if (!hvt.alive) this.registerKill(hvt, 'comrade');
+        }
+        break;
+      }
+      case 'interact': {
+        o.progress = 1;
+        this.completeInteract();
+        break;
+      }
+    }
+    this.cb.onSquadResolve?.(o.mech);
+  }
+
+  completeInteract() {
+    const o = this.objective;
+    if (o.done) return;
+    o.done = true;
+    if (o.beacon) o.beacon.material.color.set(0x4a9aff);
+    if (o.prop === 'charge' && o.destructible?.alive) {
+      // the planted charge cooks off after a beat
+      setTimeout(() => {
+        if (o.destructible.alive) this.destroyDestructible(o.destructible, 'player');
+      }, 900);
+    }
+    sound.cash();
   }
 
   currentRoomCenter() {
@@ -400,86 +623,6 @@ export class Game {
     };
   }
 
-  // ------------------------------------------------------- set-pieces
-
-  // Spawn the chosen decision option's fight into the upcoming segment.
-  spawnSetpiece(seg, sp) {
-    if (!sp || !this.map) return;
-    const S = this.map.cellSize;
-    const cells = this.map.path.filter((p) =>
-      p.seg === seg &&
-      !this.map.rooms.some((r) => Math.abs(r.x - p.x) <= 1 && Math.abs(r.z - p.z) <= 1));
-    if (cells.length < 3) return;
-    const idx = Math.min(cells.length - 2, Math.floor(cells.length * 0.6));
-    const cell = cells[idx];
-    const nxt = cells[idx + 1] ?? cell;
-    const yaw = Math.atan2(nxt.x - cell.x, nxt.z - cell.z);
-    const fwd = new THREE.Vector3(Math.sin(yaw), 0, Math.cos(yaw));
-    const lat = new THREE.Vector3(Math.cos(yaw), 0, -Math.sin(yaw));
-    const pos = new THREE.Vector3(cell.x * S, 0, cell.z * S);
-    const pick = (arr) => arr[Math.floor(Math.random() * arr.length)];
-
-    if (sp === 'car') {
-      const car = makeCar({ pick });
-      car.position.copy(pos);
-      car.rotation.y = yaw + pick([0.35, -0.35, 0.9]);
-      this.scene.add(car);
-      const dCar = { kind: 'car', group: car, hp: 7, alive: true, pos: pos.clone() };
-      car.userData.destructibleRef = dCar;
-      this.destructibles.push(dCar);
-      for (const [f, l] of [[1.6, 1.7], [-1.8, -1.5]]) {
-        const p = pos.clone().addScaledVector(fwd, f).addScaledVector(lat, l);
-        this.enemies.push(new EnemyBot(this.scene, p, null, seg));
-      }
-    } else if (sp === 'post') {
-      const grp = new THREE.Group();
-      const mat = new THREE.MeshLambertMaterial({ color: 0x6e5c3a });
-      for (const k of [-1, 0, 1]) {
-        const crate = new THREE.Mesh(new THREE.BoxGeometry(1.6, 1.1, 0.9), mat);
-        crate.position.copy(pos).addScaledVector(lat, k * 1.7);
-        crate.position.y = 0.55;
-        crate.rotation.y = yaw + k * 0.1;
-        grp.add(crate);
-      }
-      this.scene.add(grp);
-      const dPost = { kind: 'post', group: grp, hp: 6, alive: true, pos: pos.clone() };
-      grp.userData.destructibleRef = dPost;
-      this.destructibles.push(dPost);
-      for (const l of [-1.2, 1.2]) {
-        const p = pos.clone().addScaledVector(fwd, 2.3).addScaledVector(lat, l);
-        this.enemies.push(new EnemyBot(this.scene, p, null, seg));
-      }
-    } else if (sp === 'tower') {
-      // find a solid cell beside the lane for the tower footing
-      let footing = null;
-      for (const [dx, dz] of [[2, 0], [-2, 0], [0, 2], [0, -2], [2, 2], [-2, -2]]) {
-        const x = cell.x + dx, z = cell.z + dz;
-        if (!this.map.isCarved(x, z) && !this.pillarSet.has(`${x},${z}`)) { footing = { x, z }; break; }
-      }
-      if (!footing) return;
-      const g = new THREE.Group();
-      const legMat = new THREE.MeshLambertMaterial({ color: 0x4a4438 });
-      for (const [lx, lz] of [[-0.9, -0.9], [0.9, -0.9], [-0.9, 0.9], [0.9, 0.9]]) {
-        const leg = new THREE.Mesh(new THREE.BoxGeometry(0.22, 5.2, 0.22), legMat);
-        leg.position.set(lx, 2.6, lz);
-        g.add(leg);
-      }
-      const deck = new THREE.Mesh(new THREE.BoxGeometry(2.6, 0.25, 2.6), legMat);
-      deck.position.y = 4.85;
-      const rail = new THREE.Mesh(new THREE.BoxGeometry(2.6, 0.6, 0.08), legMat);
-      rail.position.set(0, 5.3, 1.26);
-      g.add(deck, rail);
-      g.position.set(footing.x * S, 0, footing.z * S);
-      this.scene.add(g);
-      const sniper = new EnemyBot(
-        this.scene,
-        new THREE.Vector3(footing.x * S, 4.98, footing.z * S),
-        null, seg, { elevated: true }
-      );
-      this.enemies.push(sniper);
-    }
-  }
-
   destroyDestructible(d, by = 'player') {
     if (!d.alive) return;
     d.alive = false;
@@ -487,9 +630,12 @@ export class Game {
     this.effects.explosion(blast);
     sound.explosion();
     this.shake = Math.min(this.shake + 0.6, 1);
-    if (d.kind === 'car') {
+    if (d.kind === 'post') {
+      // barricade breaks apart
+      d.group.traverse((o) => { if (o.isMesh) { o.scale.y = 0.3; o.position.y = 0.16; } });
+    } else {
+      // vehicles / objective targets cook off, taking out anyone beside them
       d.group.userData.wreck?.();
-      // the blast takes out the crew standing around it
       for (const e of this.enemies) {
         if (e.alive && e.group.position.distanceTo(blast) < 6.5 &&
             this.losClear(blast, e.group.position.clone().setY(1.2))) {
@@ -498,17 +644,13 @@ export class Game {
           if (!e.alive) this.registerKill(e, by);
         }
       }
-    } else {
-      // barricade breaks apart
-      d.group.traverse((o) => { if (o.isMesh) { o.scale.y = 0.3; o.position.y = 0.16; } });
     }
   }
 
-  // called by UI after a decision choice; `sp` is the chosen option's
-  // set-piece, staged into the next segment before the squad moves out
-  resumeAfterDecision(sp = null) {
+  // called by UI after a decision choice — the next segment's objective was
+  // staged by beginSegment
+  resumeAfterDecision() {
     if (this.mode !== 'decision') return;
-    this.spawnSetpiece(this.round.step + 1, sp);
     this.mode = 'play';
     this.controls.enable();
     if (!IS_TOUCH) this.controls.requestPointerLock();
@@ -646,6 +788,10 @@ export class Game {
         this.effects.explosion(g.mesh.position);
         sound.explosion();
         this.shake = 0.7;
+        // explosions are loud — a stealth segment goes loud with them
+        if (this.objective?.mech === 'stealth' && !this.objective.compromised) {
+          this.compromiseStealth();
+        }
         const blast = g.mesh.position.clone().setY(0.6);
         for (const e of this.enemies) {
           if (e.alive && e.group.position.distanceTo(g.mesh.position) < 5.5 &&
@@ -730,6 +876,10 @@ export class Game {
       for (const [px, pz] of pts) {
         const cell = this.map.cellAt(px, pz);
         if (!this.map.isCarved(cell.x, cell.z)) return false;
+        // the route ahead stays sealed until this checkpoint is cleared —
+        // the decision room is a real boundary, not just a trigger
+        const segOf = this.map.segOfCell(cell.x, cell.z);
+        if (segOf !== undefined && this.round && segOf > this.round.step) return false;
       }
       p.x = nx; p.z = nz;
       return true;
@@ -759,27 +909,157 @@ export class Game {
 
   updatePlayFlow(dt) {
     const r = this.round;
+    const o = this.objective;
     r.segTime += dt;
 
-    // engage current-segment enemies
+    // engage current-segment enemies (stealth patrols hold until compromised)
     const playerPos = this.player.pos;
     for (const e of this.enemies) {
       if (!e.alive) continue;
       if (e.seg === r.step) {
         e.engageDelay -= dt;
-        if (e.engageDelay <= 0) e.engage();
+        if (e.engageDelay <= 0 && !e.stealthMode) e.engage();
         e.engagedFor = (e.engagedFor ?? 0) + (e.state === 'combat' ? dt : 0);
-      } else if (e.seg === r.step + 1 && e.group.position.distanceTo(playerPos) < this.map.cellSize * 1.6) {
+      } else if (e.seg === r.step + 1 && !e.stealthMode &&
+                 e.group.position.distanceTo(playerPos) < this.map.cellSize * 1.6) {
         // early birds near the room edge open up too
         e.engage();
       }
     }
 
-    // pot presentation: creep toward the next rung with kills + progress
-    // (starts from 0 — nothing is secured until the first checkpoint)
+    // ------------------- objective mechanics
+    const segAlive = this.enemies.filter((e) => e.seg === r.step && e.alive);
+    let objFrac = 0;
+    let detail = '';
+    let warn = false;
+    switch (o?.mech) {
+      case 'sweep': {
+        o.done = segAlive.length === 0;
+        objFrac = r.segEnemyTotal > 0 ? 1 - segAlive.length / r.segEnemyTotal : 1;
+        detail = o.done ? 'AREA CLEAR' : `${segAlive.length} HOSTILE${segAlive.length === 1 ? '' : 'S'} LEFT`;
+        break;
+      }
+      case 'stealth': {
+        o.done = true; // completes on reaching the checkpoint
+        if (!o.compromised) {
+          let watchers = 0;
+          for (const e of segAlive) {
+            if (e.elevated) continue;
+            tmpV.subVectors(playerPos, e.group.position);
+            const dist = tmpV.length();
+            if (dist > 17) continue;
+            tmpV.normalize();
+            const fx = Math.sin(e.group.rotation.y), fz = Math.cos(e.group.rotation.y);
+            if (tmpV.x * fx + tmpV.z * fz < 0.45) continue;
+            tmpV2.set(e.group.position.x, e.group.position.y + 1.5, e.group.position.z);
+            if (this.losClear(tmpV2, playerPos)) watchers++;
+          }
+          if (watchers > 0) o.detectT += dt * watchers;
+          else o.detectT = Math.max(0, o.detectT - dt * 0.8);
+          o.seen = watchers > 0;
+          if (o.detectT > 0.9 || (r.lethal && r.segTime > 2.5)) this.compromiseStealth();
+          detail = o.seen ? 'BEING SPOTTED' : 'UNDETECTED';
+          warn = o.seen;
+        } else {
+          detail = 'COMPROMISED — WEAPONS FREE';
+          warn = true;
+        }
+        objFrac = 0;
+        break;
+      }
+      case 'destroy': {
+        o.done = o.destructible ? !o.destructible.alive : true;
+        objFrac = o.done ? 1 : 0;
+        detail = o.done ? 'TARGET DESTROYED' : 'TARGET ACTIVE — LIGHT IT UP';
+        break;
+      }
+      case 'hvt': {
+        const hvt = this.enemies.find((e) => e.id === o.hvtId);
+        o.done = !hvt || !hvt.alive;
+        objFrac = o.done ? 1 : 0;
+        detail = o.done ? 'TARGET DOWN' : 'TARGET MARKED — TAKE THE SHOT';
+        break;
+      }
+      case 'interact': {
+        if (!o.done && o.sitePos) {
+          const near = Math.hypot(o.sitePos.x - playerPos.x, o.sitePos.z - playerPos.z) < 2.6;
+          if (near) {
+            o.progress = Math.min(1, o.progress + dt / 3.4);
+            if (o.progress >= 1) this.completeInteract();
+          }
+          detail = near ? `WORKING — ${Math.round(o.progress * 100)}%`
+            : o.progress > 0 ? `PAUSED AT ${Math.round(o.progress * 100)}% — GET BACK ON IT`
+              : 'GET TO THE DEVICE';
+        } else {
+          detail = 'OBJECTIVE SECURED';
+        }
+        objFrac = o.progress;
+        break;
+      }
+      case 'hold': {
+        const room = this.currentRoomCenterFor(r.step);
+        if (room && !o.done) {
+          const roomCell = this.map.rooms[r.step - 1];
+          const pcHold = this.map.cellAt(playerPos.x, playerPos.z);
+          const inZone = Math.abs(pcHold.x - roomCell.x) <= 1 && Math.abs(pcHold.z - roomCell.z) <= 1;
+          if (inZone) {
+            o.holdT += dt;
+            // attack waves crash the hold
+            const waveTimes = [1.5, 6.5];
+            if (o.wavesSpawned < waveTimes.length && o.holdT > waveTimes[o.wavesSpawned]) {
+              this.spawnHoldWave(r.step, room);
+              o.wavesSpawned++;
+            }
+            detail = `HOLD THE POSITION — ${Math.ceil(o.holdNeeded - o.holdT)}s`;
+            warn = true;
+          } else {
+            detail = 'GET TO THE HOLD POINT';
+          }
+          if (o.holdT >= o.holdNeeded) o.done = true;
+        } else {
+          detail = 'POSITION HELD';
+        }
+        objFrac = Math.min(1, o.holdT / o.holdNeeded);
+        break;
+      }
+      case 'timed': {
+        o.done = true;
+        if (o.timer !== null && !o.overdue) {
+          o.timer -= dt;
+          if (o.timer <= 0) {
+            o.overdue = true;
+            this.cb.onOverdue?.();
+          }
+        }
+        const t = Math.max(0, o.timer ?? 0);
+        detail = o.overdue ? 'OVERDUE — SQUAD COVERING, MOVE!' : `${Math.floor(t / 60)}:${String(Math.floor(t % 60)).padStart(2, '0')}`;
+        warn = o.overdue || t < 12;
+        objFrac = 0;
+        break;
+      }
+      case 'escort': {
+        o.done = true;
+        if (this.npc && !this.npcActive) {
+          if (this.npc.group.position.distanceTo(playerPos) < 8) {
+            this.npcActive = true;
+            this.cb.onAssetPickup?.();
+          }
+          detail = 'REACH THE ASSET';
+        } else {
+          detail = 'ASSET IN TOW — MOVE TO THE CHECKPOINT';
+        }
+        objFrac = this.npcActive ? 0.6 : 0;
+        break;
+      }
+      default:
+        o && (o.done = true);
+    }
+    if (o) this.cb.onObjectiveTick?.(detail, warn);
+
+    // pot presentation: creep toward the next rung with objective + travel
+    // progress (starts from 0 — nothing is secured until checkpoint 1)
     const prevMult = r.step === 1 ? 0 : r.plan.mults[r.step - 2];
     const nextMult = r.plan.mults[r.step - 1];
-    const killFrac = r.segEnemyTotal > 0 ? r.segKills / r.segEnemyTotal : 1;
     const room = this.currentRoomCenter();
     let distFrac = 0;
     if (room) {
@@ -790,7 +1070,7 @@ export class Game {
       const left = Math.hypot(room.x - playerPos.x, room.z - playerPos.z);
       distFrac = THREE.MathUtils.clamp(1 - left / total, 0, 1);
     }
-    const frac = THREE.MathUtils.clamp(killFrac * 0.55 + distFrac * 0.45, 0, 0.98);
+    const frac = THREE.MathUtils.clamp(distFrac * 0.45 + objFrac * 0.55, 0, 0.98);
     const targetPot = r.bet * (prevMult + (nextMult - prevMult) * frac);
     r.pot += (targetPot - r.pot) * Math.min(1, dt * 3);
     this.cb.onPot?.(r.pot, nextMult * r.bet);
@@ -808,8 +1088,9 @@ export class Game {
       this.applyPlayerHit(0.6);
     }
 
-    // reaching the decision room — trigger from ANY cell of the 3x3 room,
-    // not just near its center (the route may pass along a side column)
+    // reaching the decision room — trigger from ANY cell of the 3x3 room.
+    // Objectives that demand action gate the checkpoint; if the player
+    // stalls there, the squad resolves it for them after a few seconds.
     const roomCell = this.map.rooms[r.step - 1];
     if (roomCell) {
       const pc = this.map.cellAt(playerPos.x, playerPos.z);
@@ -817,19 +1098,54 @@ export class Game {
         if (r.lethal) {
           // ambushed at the threshold — the round was always ending here
           this.applyPlayerHit(1.4);
-        } else if (r.step >= this.map.segments) {
-          this.finishRoundWin();
-        } else {
-          this.enterDecision();
+        } else if (o && !o.done && o.mech !== 'hold') {
+          o.stallT += dt;
+          o.hintT -= dt;
+          if (o.hintT <= 0) {
+            o.hintT = 2.5;
+            this.cb.onObjectiveHint?.(o.title);
+          }
+          if (o.stallT > 6) this.autoResolveObjective();
+        } else if (o && o.done) {
+          if (r.step >= this.map.segments) this.finishRoundWin();
+          else this.enterDecision();
         }
       }
     }
+  }
+
+  spawnHoldWave(step, room) {
+    // attackers pour in from the corridor cells around the hold zone
+    const S = this.map.cellSize;
+    const candidates = this.map.path.filter((p) =>
+      p.seg === step || p.seg === step + 1);
+    for (let i = 0; i < 3; i++) {
+      const c = candidates[Math.floor(Math.random() * candidates.length)];
+      if (!c) break;
+      const e = new EnemyBot(this.scene,
+        new THREE.Vector3(c.x * S + (Math.random() - 0.5) * 2, 0, c.z * S + (Math.random() - 0.5) * 2),
+        null, step);
+      e.engage();
+      this.enemies.push(e);
+      this.round.segEnemyTotal++;
+    }
+    sound.alarm();
   }
 
   enterDecision() {
     const r = this.round;
     r.pot = r.bet * r.plan.mults[r.step - 1];
     this.cb.onPot?.(r.pot, r.pot);
+    // wrap up segment furniture: secure the asset, clear the site beacon
+    if (this.npc) {
+      this.cb.onAssetSecured?.();
+      this.npc.dispose();
+      this.npc = null;
+    }
+    if (this.objective?.beacon) {
+      this.scene.remove(this.objective.beacon);
+      this.objective.beacon = null;
+    }
     this.mode = 'decision';
     this.controls.disable();
     if (document.pointerLockElement) document.exitPointerLock?.();
@@ -979,10 +1295,26 @@ export class Game {
       this.comrades[i].update(dt, {
         targetPos,
         playerYaw: this.controls.yaw,
-        enemies: combat ? this.enemies.filter((e) => e.seg === r.step || e.state === 'combat') : [],
+        // comrades never touch the HVT — that kill belongs to the commander
+        enemies: combat
+          ? this.enemies.filter((e) => !e.isHVT && (e.seg === r.step || e.state === 'combat'))
+          : [],
         effects: this.effects,
         graceElapsed: combat && r.segTime > 4.5,
         onComradeKill: (e) => this.registerKill(e, 'comrade'),
+        ...this.botCtxExtras()
+      });
+    }
+
+    // escort asset trails the whole column once picked up
+    if (this.npc) {
+      const behind = (this.comradeSlots.length + 1) * COLUMN_SPACING + 1.4;
+      this.npc.update(dt, {
+        targetPos: this.npcActive ? this.trailBehindPoint(behind) : this.npc.group.position.clone(),
+        playerYaw: this.controls.yaw,
+        enemies: [],
+        effects: this.effects,
+        graceElapsed: false,
         ...this.botCtxExtras()
       });
     }

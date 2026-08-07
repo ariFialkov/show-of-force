@@ -34,10 +34,10 @@ export class Effects {
     mesh.position.copy(pos).addScaledVector(dir, 0.15);
     this.scene.add(mesh);
     this.items.push({
-      mesh, life: 0, ttl: 0.06,
+      mesh, life: 0, ttl: 0.055,
       update: (it) => {
-        it.mesh.scale.setScalar(1 + it.life * 20);
-        it.mesh.material.opacity = 1 - it.life / it.ttl;
+        it.mesh.scale.setScalar(1 + it.life * 7);
+        it.mesh.material.opacity = 0.9 * (1 - it.life / it.ttl);
       }
     });
   }

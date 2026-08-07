@@ -135,8 +135,8 @@ ui.els.deploy.addEventListener('click', () => {
 });
 
 function startRound() {
-  const plan = drawRound(makeCryptoRng());
-  ui.buildStepDots();
+  const plan = drawRound(makeCryptoRng(), mission.steps);
+  ui.buildStepDots(mission.steps);
   ui.setStep(1);
   ui.setPot(0, bet * plan.mults[0]);
   ui.setKills(0);
@@ -176,29 +176,39 @@ game.cb.onHealth = (h) => ui.setHealth(h);
 game.cb.onScope = (v) => ui.setScoped(v);
 
 game.cb.onDecision = (step, pot) => {
-  const flavor = mission.decisions[step - 1] ??
-    [{ t: 'Push forward', sp: null }, { t: 'Flank around', sp: null }];
+  const flavor = mission.decisions[step - 1] ?? [{ t: 'Push forward' }, { t: 'Flank around' }];
+  const nextObjective = mission.objectives[step]; // objective of the segment ahead
   ui.showDecision({
     step,
-    maxSteps: GAME.maxSteps,
+    maxSteps: mission.steps,
     pot,
     nextMult: game.round.plan.mults[step], // multiplier if the next step survives
     optionA: flavor[0].t,
     optionB: flavor[1].t,
     cashAmount: pot,
-    canCash: game.round.plan.mults[step - 1] >= 1
+    canCash: game.round.plan.mults[step - 1] >= 1,
+    nextTitle: nextObjective?.title
   }, {
     onContinue: (which) => {
       sound.click();
       const chosen = which === 'a' ? flavor[0] : flavor[1];
       ui.flashMsg(`ROGER — ${chosen.t.toUpperCase()}`);
-      game.resumeAfterDecision(chosen.sp); // the pick becomes the next fight
+      game.resumeAfterDecision();
     },
     onCashOut: () => {
       game.cashOut(); // fires onRoundEnd
     }
   });
 };
+
+game.cb.onObjective = (o) => ui.setObjective(o.title);
+game.cb.onObjectiveTick = (detail, warn) => ui.setObjectiveDetail(detail, warn);
+game.cb.onObjectiveHint = (title) => ui.flashMsg(`OBJECTIVE FIRST — ${title.toUpperCase()}`);
+game.cb.onSquadResolve = () => ui.flashMsg('SQUAD SECURED THE OBJECTIVE');
+game.cb.onCompromised = () => ui.flashMsg('COMPROMISED — WEAPONS FREE');
+game.cb.onOverdue = () => ui.flashMsg('OVERDUE — SQUAD COVERING, MOVE!');
+game.cb.onAssetPickup = () => ui.flashMsg('ASSET ACQUIRED — BRING THEM HOME');
+game.cb.onAssetSecured = () => ui.flashMsg('ASSET SECURED');
 
 game.cb.onRoundEnd = ({ result, payout, step, kills }) => {
   if (payout > 0) wallet.credit(payout);
@@ -207,7 +217,7 @@ game.cb.onRoundEnd = ({ result, payout, step, kills }) => {
     setTimeout(() => {
       ui.showHud(false);
       ui.setHealth(100);
-      ui.showResult({ result, payout, step, kills, bet }, () => {
+      ui.showResult({ result, payout, step, kills, bet, maxSteps: mission.steps }, () => {
         enterLobby();
       });
       ui.fade(false);

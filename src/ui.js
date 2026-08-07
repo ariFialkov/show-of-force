@@ -1,7 +1,6 @@
 // DOM/HUD layer: lobby screen, HUD, decision overlay, result screen,
 // typewriter mission title.
 
-import { GAME } from './config.js';
 import { fmtMoney, fmtMult } from './rtp.js';
 
 const $ = (id) => document.getElementById(id);
@@ -31,13 +30,24 @@ export const els = {
 
 // ------------------------------------------------------------------- HUD
 
-export function buildStepDots() {
+export function buildStepDots(n) {
   els.steps.innerHTML = '';
-  for (let i = 0; i < GAME.maxSteps; i++) {
+  for (let i = 0; i < n; i++) {
     const d = document.createElement('div');
     d.className = 'step-dot';
     els.steps.appendChild(d);
   }
+}
+
+export function setObjective(title) {
+  document.getElementById('hud-obj-title').textContent = `◈ ${title.toUpperCase()}`;
+  setObjectiveDetail('', false);
+}
+
+export function setObjectiveDetail(text, warn) {
+  const el = document.getElementById('hud-obj-detail');
+  if (el.textContent !== text) el.textContent = text;
+  el.classList.toggle('warn', !!warn);
 }
 
 export function setStep(step) {
@@ -113,10 +123,13 @@ export function typewriterTitle(text, done) {
 
 // ---------------------------------------------------------- decision UI
 
-export function showDecision({ step, maxSteps, pot, nextMult, optionA, optionB, cashAmount, canCash }, handlers) {
+export function showDecision({ step, maxSteps, pot, nextMult, optionA, optionB, cashAmount, canCash, nextTitle }, handlers) {
   els.decisionKicker.textContent = `DECISION POINT ${step} / ${maxSteps}`;
   els.decisionPot.textContent = fmtMoney(pot);
   els.decisionNext.textContent = fmtMult(nextMult);
+  const nextObj = document.getElementById('decision-next-obj');
+  nextObj.classList.toggle('hidden', !nextTitle);
+  if (nextTitle) nextObj.querySelector('b').textContent = nextTitle.toUpperCase();
   els.decisionA.textContent = `▸ ${optionA}`;
   els.decisionB.textContent = `▸ ${optionB}`;
   els.decisionA.onclick = () => { hideDecision(); handlers.onContinue('a'); };
@@ -141,7 +154,7 @@ export function hideDecision() {
 
 // ------------------------------------------------------------ result UI
 
-export function showResult({ result, payout, step, kills, bet }, onContinue) {
+export function showResult({ result, payout, step, kills, bet, maxSteps }, onContinue) {
   const kia = result === 'kia';
   els.resultHeadline.textContent = kia ? 'K.I.A.' : result === 'cashout' ? 'CASHED OUT' : 'EXTRACTED';
   els.resultHeadline.classList.toggle('kia', kia);
@@ -153,7 +166,7 @@ export function showResult({ result, payout, step, kills, bet }, onContinue) {
   els.resultPayout.textContent = kia ? `-${fmtMoney(bet)}` : `+${fmtMoney(payout)}`;
   els.resultPayout.style.color = kia ? 'var(--danger)' : 'var(--gold)';
   els.resultStats.innerHTML =
-    `<span>CHECKPOINTS <b>${kia ? step - 1 : step}/${GAME.maxSteps}</b></span>` +
+    `<span>CHECKPOINTS <b>${kia ? step - 1 : step}/${maxSteps}</b></span>` +
     `<span>KILLS <b>${kills}</b></span>` +
     `<span>BET <b>${fmtMoney(bet)}</b></span>`;
   els.resultContinue.onclick = () => {

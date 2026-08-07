@@ -132,6 +132,27 @@ body.touch-mode.playing .combat-btn { display: flex; }
 .step-dot.current { background: var(--gold); border-color: var(--gold); animation: pulse 1s infinite; }
 @keyframes pulse { 50% { opacity: 0.45; } }
 
+#hud-objective {
+  position: absolute;
+  top: calc(64px + env(safe-area-inset-top));
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 5px 12px;
+  background: rgba(13, 17, 21, 0.72);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  font-family: var(--mono);
+  white-space: nowrap;
+  max-width: 94vw;
+  overflow: hidden;
+}
+#hud-obj-title { font-size: 11px; letter-spacing: 0.1em; color: var(--text); }
+#hud-obj-detail { font-size: 10px; letter-spacing: 0.08em; color: var(--accent); }
+#hud-obj-detail.warn { color: var(--danger); animation: pulse 0.8s infinite; }
+
 #crosshair {
   position: absolute;
   left: 50%; top: 50%;
@@ -247,6 +268,15 @@ body.touch-mode.playing .combat-btn { display: flex; }
   margin-bottom: 16px;
 }
 .decision-secure b { color: var(--gold); }
+
+#decision-next-obj {
+  font-family: var(--mono);
+  font-size: 10.5px;
+  letter-spacing: 0.08em;
+  color: var(--dim);
+  margin: -8px 0 14px;
+}
+#decision-next-obj b { color: var(--accent); }
 
 .opt {
   display: block;

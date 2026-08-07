@@ -167,74 +167,200 @@ export const DOMAIN_TEAM = {
 
 export const MISSION_TYPES = {
   raid: {
-    id: 'raid', name: 'Raid',
+    id: 'raid', name: 'Raid', steps: [6, 8],
     subtypes: ['Compound Raid', 'Armory Raid', 'Comms Blackout Raid', 'Night Raid'],
     brief: 'Hit the objective hard, clear every strongpoint, exfil before reinforcements arrive.'
   },
   ambush: {
-    id: 'ambush', name: 'Ambush',
+    id: 'ambush', name: 'Ambush', steps: [5, 7],
     subtypes: ['Convoy Ambush', 'Patrol Ambush', 'Kill-Zone Ambush'],
     brief: 'Set the trap, spring it on the hostile column, sweep the survivors.'
   },
   rescue: {
-    id: 'rescue', name: 'Rescue',
+    id: 'rescue', name: 'Rescue', steps: [7, 10],
     subtypes: ['Hostage Rescue', 'Downed Pilot Recovery', 'Asset Extraction'],
     brief: 'Locate the friendly, break the cordon, bring everyone home.'
   },
   elimination: {
-    id: 'elimination', name: 'Direct Elimination',
+    id: 'elimination', name: 'Direct Elimination', steps: [3, 5],
     subtypes: ['HVT Assassination', 'Command Decapitation', 'Bounty Contract'],
     brief: 'One target. Confirm identity, eliminate, disappear.'
   },
   recovery: {
-    id: 'recovery', name: 'Site Recovery',
+    id: 'recovery', name: 'Site Recovery', steps: [5, 8],
     subtypes: ['Intel Recovery', 'Weapons Cache Recovery', 'Black-Box Recovery'],
     brief: 'Secure the site, recover the package, deny everything else.'
   }
 };
 
-// Decision-point flavor: pairs of tactical options per mission type.
-// Each option carries a set-piece tag (`sp`) that is spawned into the NEXT
-// segment when chosen, so the text you pick becomes the fight you get:
-//   'car'   destructible vehicle + crew
-//   'post'  manned barricade of destructible crates
-//   'tower' sniper on a watchtower
-//   null    standard patrol sweep
-export const DECISIONS = {
-  raid: [
-    [{ t: 'Breach the main gate', sp: 'post' }, { t: 'Cut through the service alley', sp: null }],
-    [{ t: 'Smoke and push the courtyard', sp: null }, { t: 'Climb the collapsed wall', sp: 'tower' }],
-    [{ t: 'Clear the guard post first', sp: 'post' }, { t: 'Slip past under the walkway', sp: null }],
-    [{ t: 'Blow the barricade', sp: 'post' }, { t: 'Take the drainage tunnel', sp: null }],
-    [{ t: 'Assault the barracks head-on', sp: 'post' }, { t: 'Flank along the rooftops', sp: 'tower' }]
+// ------------------------------------------------------------- objectives
+//
+// Every checkpoint segment runs one OBJECTIVE, built from 8 mechanical
+// archetypes the engine knows how to stage:
+//   sweep    kill every hostile in the segment to open the checkpoint
+//   destroy  a destructible target (prop kinds below) must be destroyed
+//   hvt      a marked target the COMMANDER must personally drop
+//   stealth  patrols + detection meter; stay unseen or it goes loud
+//   interact hold position at a device to plant/download/disable
+//   hold     defend the checkpoint zone against attack waves
+//   timed    beat the clock to the checkpoint
+//   escort   pick up an asset who follows the column
+//
+// prop kinds for `destroy`: car, cache, comms, generator, aa, mortar
+// site kinds for `interact`: console, charge
+
+const O = (mech, title, prop = null) => ({ mech, title, prop });
+
+// Mission arcs: opening step, middle pool, late pool (last third), finale.
+export const OBJECTIVE_ARCS = {
+  raid: {
+    open: [
+      O('sweep', 'Breach and clear the outer compound'),
+      O('stealth', 'Infiltrate the perimeter undetected')
+    ],
+    mid: [
+      O('sweep', 'Clear the barracks'),
+      O('sweep', 'Eliminate all hostiles in the motor pool'),
+      O('destroy', 'Destroy the weapons cache', 'cache'),
+      O('destroy', 'Destroy the comms array', 'comms'),
+      O('interact', 'Plant C4 on the armory', 'charge'),
+      O('hold', 'Break the enemy counterattack'),
+      O('hvt', 'Capture the enemy commander')
+    ],
+    late: [
+      O('destroy', 'Destroy the AA emplacement', 'aa'),
+      O('hold', 'Hold the strongpoint'),
+      O('sweep', 'Retake the checkpoint')
+    ],
+    final: [
+      O('timed', 'Escape before reinforcements arrive'),
+      O('sweep', 'Push to extraction')
+    ]
+  },
+  ambush: {
+    open: [
+      O('stealth', 'Set the kill zone quietly'),
+      O('stealth', 'Mark the convoy route undetected')
+    ],
+    mid: [
+      O('destroy', 'Destroy the lead vehicle', 'car'),
+      O('destroy', 'Destroy the getaway vehicle', 'car'),
+      O('sweep', 'Eliminate the convoy escort'),
+      O('hold', 'Hold the ambush line'),
+      O('hvt', 'Eliminate the escort leader')
+    ],
+    late: [
+      O('destroy', 'Silence the mortar position', 'mortar'),
+      O('timed', 'Catch the fleeing trucks'),
+      O('sweep', 'Sweep the survivors')
+    ],
+    final: [
+      O('timed', 'Reach extraction before the airstrike'),
+      O('sweep', 'Push to extraction')
+    ]
+  },
+  rescue: {
+    open: [
+      O('stealth', 'Infiltrate the holding area'),
+      O('interact', 'Cut the external power', 'console')
+    ],
+    mid: [
+      O('sweep', 'Clear the cell block'),
+      O('escort', 'Escort the hostage'),
+      O('escort', 'Carry the wounded VIP'),
+      O('interact', 'Hack the security doors', 'console'),
+      O('sweep', 'Secure the evacuation corridor'),
+      O('hold', 'Defend the medevac')
+    ],
+    late: [
+      O('escort', 'Move the asset toward the LZ'),
+      O('hold', 'Defend the extraction point'),
+      O('sweep', 'Clear the landing zone')
+    ],
+    final: [
+      O('timed', 'Reach extraction with the asset'),
+      O('escort', 'Exfiltrate with the hostage')
+    ]
+  },
+  elimination: {
+    open: [
+      O('stealth', 'Track the HVT undetected'),
+      O('stealth', 'Slip the compound edge unseen')
+    ],
+    mid: [
+      O('interact', 'Photograph the meeting', 'console'),
+      O('stealth', 'Shadow the bodyguard detail'),
+      O('sweep', 'Silence the bodyguards')
+    ],
+    late: [
+      O('hvt', 'Neutralize the HVT')
+    ],
+    final: [
+      O('timed', 'Vanish before the lockdown'),
+      O('stealth', 'Exfil without a trace')
+    ]
+  },
+  recovery: {
+    open: [
+      O('sweep', 'Sweep the crash perimeter'),
+      O('stealth', 'Locate the site quietly')
+    ],
+    mid: [
+      O('interact', 'Recover the encrypted laptop', 'console'),
+      O('interact', 'Recover the black box', 'console'),
+      O('destroy', 'Destroy the explosives cache', 'cache'),
+      O('destroy', 'Kill the power generator', 'generator'),
+      O('destroy', 'Destroy the satellite uplink', 'comms'),
+      O('sweep', 'Search the cargo yard')
+    ],
+    late: [
+      O('interact', 'Secure the intel before deletion', 'console'),
+      O('destroy', 'Burn the leftover stockpile', 'cache')
+    ],
+    final: [
+      O('timed', 'Carry the package to extraction'),
+      O('sweep', 'Push to extraction')
+    ]
+  }
+};
+
+// Decision options describe HOW to take on the next objective — the pick is
+// flavor (the objective is fixed), but the text matches what comes next.
+export const APPROACH = {
+  sweep: [
+    ['Stack up and breach', 'Sweep in from the flank'],
+    ['Go in loud', 'Split and pincer them'],
+    ['Clear it room by room', 'Push straight up the middle']
   ],
-  ambush: [
-    [{ t: 'Take the high overlook', sp: 'tower' }, { t: 'Set charges on the road', sp: 'car' }],
-    [{ t: 'Hit the lead vehicle', sp: 'car' }, { t: 'Wait for the full column', sp: 'car' }],
-    [{ t: 'Push through the kill zone', sp: 'post' }, { t: 'Circle behind the wreckage', sp: 'car' }],
-    [{ t: 'Chase the runners', sp: 'car' }, { t: 'Hold and re-set the trap', sp: 'post' }],
-    [{ t: 'Sweep the ditch line', sp: null }, { t: 'Advance up the median', sp: 'post' }]
+  destroy: [
+    ['Frag it from cover', 'Close in and hose it down'],
+    ['Hit it from the alley', 'Overwatch and volley fire'],
+    ['Charge the position', 'Pick off the guards first']
   ],
-  rescue: [
-    [{ t: 'Follow the drag marks', sp: null }, { t: 'Interrogate route through the market', sp: 'post' }],
-    [{ t: 'Breach the holding cell block', sp: 'post' }, { t: 'Draw guards to the depot', sp: 'car' }],
-    [{ t: 'Carry the friendly through the yards', sp: null }, { t: 'Secure a vehicle first', sp: 'car' }],
-    [{ t: 'Run the searchlight gap', sp: 'tower' }, { t: 'Cut power at the substation', sp: 'post' }],
-    [{ t: 'Break for the extraction lane', sp: 'car' }, { t: 'Hole up and thin the pursuit', sp: 'post' }]
+  hvt: [
+    ['Close for the confirmed kill', 'Drop him from range'],
+    ['Cut off his escape first', 'Take the shot on sight']
   ],
-  elimination: [
-    [{ t: 'Stalk through the compound edge', sp: null }, { t: 'Move under the vantage line', sp: 'tower' }],
-    [{ t: 'Take the long-angle shot', sp: 'tower' }, { t: 'Close in for confirmation', sp: 'post' }],
-    [{ t: 'Silence the bodyguard detail', sp: 'post' }, { t: 'Bypass and isolate the target', sp: null }],
-    [{ t: 'Exfil through the crowd', sp: null }, { t: 'Vanish over the back wall', sp: 'tower' }],
-    [{ t: 'Push the panic route', sp: 'car' }, { t: 'Ambush the escape car', sp: 'car' }]
+  stealth: [
+    ['Hug the shadows left', 'Take the drainage line right'],
+    ['Crawl the wall line', 'Time the patrol gaps'],
+    ['Move on my count', 'Ghost through one at a time']
   ],
-  recovery: [
-    [{ t: 'Sweep the crash perimeter', sp: null }, { t: 'Go straight for the debris field', sp: 'post' }],
-    [{ t: 'Crack the site vault', sp: 'post' }, { t: 'Strip the comms mast first', sp: 'tower' }],
-    [{ t: 'Carry the package low route', sp: null }, { t: 'Ridge route with overwatch', sp: 'tower' }],
-    [{ t: 'Burn the leftover intel', sp: 'post' }, { t: 'Rig the site and move', sp: 'car' }],
-    [{ t: 'Sprint the open ground', sp: null }, { t: 'Leapfrog cover by pairs', sp: 'post' }]
+  interact: [
+    ['Cover me while I work', 'Secure the area first'],
+    ['I take the device, you hold', 'Fast hands, watch the door']
+  ],
+  hold: [
+    ['Fortify the center', 'Anchor the corners'],
+    ['Dig in behind cover', 'Meet them at the mouth']
+  ],
+  timed: [
+    ['Straight sprint, no stops', 'Cut through the side lanes'],
+    ['Run and gun', 'Bounds by pairs, fast']
+  ],
+  escort: [
+    ['Keep the asset close', 'Bound ahead and clear'],
+    ['Shield the package', 'Speed over caution']
   ]
 };
 
@@ -251,7 +377,6 @@ export const OP_ADJ = ['Silent', 'Iron', 'Broken', 'Crimson', 'Hollow', 'Burning
 export const OP_NOUN = ['Talon', 'Anvil', 'Serpent', 'Lantern', 'Spear', 'Harvest', 'Vigil', 'Cobra', 'Rampart', 'Ember'];
 
 export const GAME = {
-  maxSteps: 10,
   rtp: 1.0,
   lobbyRotateMs: 15000,
   squadSize: 4, // player + 3 comrades

@@ -29,9 +29,15 @@ map, icon, and sound is generated procedurally at runtime.
     ends regardless of player skill.
 - At every decision point you get two tactical options (both continue the
   mission) plus **Cash Out** at the current secured amount.
-- The option you pick becomes the next fight: choices are tagged with
-  set-pieces — a destructible getaway car with its crew, a manned crate
-  barricade, or a watchtower sniper — spawned into the upcoming segment.
+- Missions vary in length by type (assassinations run 3-5 checkpoints,
+  escorts 7-10) — every length pays the same ~×4.30 max, so short missions
+  have chunkier, riskier steps.
+- Every checkpoint segment stages a real objective from the mission's arc:
+  clear-the-area sweeps, destructible targets (caches, comms arrays,
+  generators, AA, mortars, vehicles), marked HVTs only the commander can
+  drop, stealth infiltrations with detection, plant/download interactions
+  under fire, hold-the-zone waves, timed runs, and escort assets that join
+  the column. Decision options preview the approach to the next objective.
 - Combat is line-of-sight honest: nobody (including your own squad and your
   bullets) shoots through walls; tracers clip at the first solid surface,
   and unseen enemies hunt toward you instead of blind-firing.

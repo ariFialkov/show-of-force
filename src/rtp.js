@@ -1,43 +1,63 @@
 // Betting math for the stepper/crash round.
 //
-// The ONLY things that affect the payout are the bet amount and this module.
-// Everything that happens in the 3D world (enemy fire, player kills, squad
-// saves) is presentation layered on top of the outcome drawn here.
+// The ONLY things that affect the payout are the bet amount, the mission's
+// step count, and this module. Everything in the 3D world (enemy fire,
+// player kills, squad saves, objectives) is presentation on top of the
+// outcome drawn here.
+//
+// Missions vary in length (3-10 checkpoints). Every mission's full ride
+// survives with the same cumulative probability, so the max multiplier is
+// ~4.3x regardless of length — shorter missions just have chunkier, riskier
+// steps. The ladder ramps geometrically from a sub-stake first rung to the
+// fair max, so break-even lands ~40-55% of the way through the mission,
+// right around where the bust hazard peaks.
 
 import { GAME } from './config.js';
 
-// Per-step survival probabilities (step 1..10). The early steps are nearly
-// safe; the hazard peaks around steps 4-5 and stays high to the end.
-const SURVIVAL = [0.99, 0.97, 0.94, 0.88, 0.84, 0.83, 0.82, 0.81, 0.80, 0.79];
+const FULL_RIDE_SURVIVAL = 0.2325; // → max multiplier ≈ 4.3 at RTP 1
+const START_MULT = 0.35;           // first rung pays ~0.35x the stake
 
-// Early-cashout discount on the fair ladder. Fair pay for step i is
-// r / P(survive through i); scaling it below 1 early makes the first rungs
-// pay LESS than the stake (break-even lands at step 4) and rewards riding
-// deeper. The discount reaches 1.0 at step 10, so the ride-to-the-end
-// strategy has EV exactly r * bet — that optimal strategy defines the RTP;
-// every earlier cashout has EV r * discount <= r.
-const DISCOUNT = [0.42, 0.55, 0.70, 0.82, 0.90, 0.94, 0.96, 0.98, 0.99, 1.00];
+// Hazard weight at mission fraction f (0..1]: gentle opening, danger fully
+// ramped in by ~45% through, hot until the end.
+function hazardWeight(f) {
+  return Math.min(1, Math.max(0.12, Math.pow(f / 0.45, 1.6)));
+}
 
-export function multipliers(rtp = GAME.rtp) {
+export function survivalCurve(steps) {
+  const w = [];
+  for (let i = 1; i <= steps; i++) w.push(hazardWeight(i / steps));
+  const sum = w.reduce((a, b) => a + b, 0);
+  const lnC = Math.log(FULL_RIDE_SURVIVAL);
+  return w.map((wi) => Math.exp(lnC * (wi / sum)));
+}
+
+export function multipliers(steps, rtp = GAME.rtp) {
+  const surv = survivalCurve(steps);
+  const cums = [];
+  let c = 1;
+  for (const s of surv) { c *= s; cums.push(c); }
+  const maxM = rtp / cums[steps - 1];
   const out = [];
-  let cum = 1;
-  for (let i = 0; i < GAME.maxSteps; i++) {
-    cum *= SURVIVAL[i];
-    out.push((rtp / cum) * DISCOUNT[i]);
+  for (let i = 0; i < steps; i++) {
+    const frac = steps === 1 ? 1 : i / (steps - 1);
+    const geo = START_MULT * Math.pow(maxM / START_MULT, frac);
+    // no rung may pay above its fair value, or that rung would beat the RTP
+    out.push(Math.min(geo, (rtp / cums[i]) * 0.995));
   }
+  out[steps - 1] = maxM; // ride-to-the-end EV is exactly rtp * bet
   return out;
 }
 
 // Draw the whole round outcome up-front.
-// Returns { mults, bustStep } where bustStep is 1-based, or null if the
-// player is destined to clear all 10 steps.
-export function drawRound(rng, rtp = GAME.rtp) {
-  const mults = multipliers(rtp);
+// Returns { mults, bustStep } — bustStep is 1-based, null = clears all steps.
+export function drawRound(rng, steps, rtp = GAME.rtp) {
+  const surv = survivalCurve(steps);
+  const mults = multipliers(steps, rtp);
   let bustStep = null;
-  for (let i = 0; i < GAME.maxSteps; i++) {
-    if (!rng.chance(SURVIVAL[i])) { bustStep = i + 1; break; }
+  for (let i = 0; i < steps; i++) {
+    if (!rng.chance(surv[i])) { bustStep = i + 1; break; }
   }
-  return { mults, bustStep, survival: SURVIVAL.slice() };
+  return { mults, bustStep, survival: surv, steps };
 }
 
 export function fmtMoney(v) {

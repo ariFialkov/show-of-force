@@ -6,12 +6,10 @@
 // with decoy branches, so the route branches and turns like a real compound
 // even though the mission tree is really a line.
 
-import { GAME } from '../config.js';
-
 const key = (x, z) => `${x},${z}`;
 
 export function generateMap(rng, opts = {}) {
-  const segments = opts.segments ?? GAME.maxSteps;
+  const segments = opts.segments ?? 8;
   const cellSize = opts.cellSize ?? 6;
 
   for (let attempt = 0; attempt < 48; attempt++) {
