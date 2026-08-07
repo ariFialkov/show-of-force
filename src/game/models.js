@@ -213,6 +213,95 @@ export function makeCivilian(shirtColor = 0x7a6a4a) {
   return g;
 }
 
+// ------------------------------------------------------ backup viewmodels
+
+// First-person models for each squad's backup weapon. Built around the same
+// anchor/orientation as the primary rifle viewmodel (pointing -Z).
+export function makeBackupViewmodel(kind) {
+  const g = new THREE.Group();
+  const cyl = (r1, r2, len, c, seg = 10) => {
+    const m = new THREE.Mesh(new THREE.CylinderGeometry(r1, r2, len, seg), mat(c));
+    m.rotation.x = Math.PI / 2;
+    return m;
+  };
+  switch (kind) {
+    case 'harpoon': {
+      const tube = cyl(0.045, 0.05, 0.6, 0x2a3540);
+      tube.position.z = -0.1;
+      const bolt = cyl(0.012, 0.012, 0.78, 0x9aa4ac, 6);
+      bolt.position.z = -0.25;
+      const tip = new THREE.Mesh(new THREE.ConeGeometry(0.03, 0.11, 6), mat(0xb8c2c8));
+      tip.rotation.x = -Math.PI / 2;
+      tip.position.z = -0.68;
+      const grip = box(0.045, 0.13, 0.06, 0x1c242c);
+      grip.position.set(0, -0.12, 0.12);
+      const guard = box(0.1, 0.03, 0.2, 0x232d36);
+      guard.position.set(0, -0.05, 0);
+      g.add(tube, bolt, tip, grip, guard);
+      break;
+    }
+    case 'knife': {
+      const housing = box(0.06, 0.08, 0.28, 0x2c3326);
+      housing.position.z = 0.02;
+      const blade = box(0.012, 0.05, 0.34, 0xaeb8be);
+      blade.position.z = -0.28;
+      const edge = box(0.006, 0.06, 0.3, 0xd6dde2);
+      edge.position.set(0, -0.005, -0.26);
+      const grip = box(0.05, 0.14, 0.07, 0x1a1f16);
+      grip.position.set(0, -0.12, 0.1);
+      const spring = cyl(0.03, 0.03, 0.1, 0x40483a, 8);
+      spring.position.z = -0.08;
+      g.add(housing, blade, edge, grip, spring);
+      break;
+    }
+    case 'flashgl': {
+      const barrel = cyl(0.065, 0.07, 0.42, 0x2e2c22);
+      barrel.position.z = -0.12;
+      const muzzleRing = cyl(0.075, 0.075, 0.05, 0x1c1a14);
+      muzzleRing.position.z = -0.34;
+      const drum = new THREE.Mesh(new THREE.CylinderGeometry(0.09, 0.09, 0.09, 12), mat(0x3a382c));
+      drum.rotation.z = Math.PI / 2;
+      drum.position.set(0, -0.06, 0.1);
+      const grip = box(0.05, 0.14, 0.07, 0x1c1a14);
+      grip.position.set(0, -0.16, 0.2);
+      const sight = box(0.03, 0.06, 0.05, 0x14120e);
+      sight.position.set(0, 0.09, -0.05);
+      g.add(barrel, muzzleRing, drum, grip, sight);
+      break;
+    }
+    case 'shotgun': {
+      const receiver = box(0.055, 0.09, 0.32, 0x27221c);
+      receiver.position.z = 0.05;
+      const barrel = cyl(0.026, 0.026, 0.5, 0x14161a);
+      barrel.position.set(0, 0.02, -0.3);
+      const magTube = cyl(0.02, 0.02, 0.42, 0x1c1e22);
+      magTube.position.set(0, -0.03, -0.26);
+      const pump = box(0.06, 0.06, 0.14, 0x3a2f24);
+      pump.position.set(0, -0.03, -0.32);
+      const stock = box(0.05, 0.1, 0.18, 0x3a2f24);
+      stock.position.set(0, -0.02, 0.26);
+      g.add(receiver, barrel, magTube, pump, stock);
+      break;
+    }
+    case 'rpg': {
+      const tube = cyl(0.055, 0.055, 0.85, 0x3a4034);
+      tube.position.z = 0.05;
+      const flare = cyl(0.085, 0.055, 0.16, 0x31362c);
+      flare.position.z = 0.5;
+      const warhead = new THREE.Mesh(new THREE.ConeGeometry(0.085, 0.3, 10), mat(0x4a5a3a));
+      warhead.rotation.x = -Math.PI / 2;
+      warhead.position.z = -0.5;
+      const band = cyl(0.06, 0.06, 0.04, 0x8a4a2a);
+      band.position.z = -0.34;
+      const grip = box(0.05, 0.14, 0.07, 0x1c1a14);
+      grip.position.set(0, -0.14, 0.1);
+      g.add(tube, flare, warhead, band, grip);
+      break;
+    }
+  }
+  return g;
+}
+
 // ------------------------------------------------------- decision gates
 
 // Holographic route gate: a glimmering doorway-filling frame with a large
@@ -221,7 +310,8 @@ export function makeCivilian(shirtColor = 0x7a6a4a) {
 const GATE_ACCENTS = {
   safe: { hex: 0x7dffa0, css: '125, 255, 160', text: '#d6ffe2' },
   std: { hex: 0xffd27a, css: '255, 210, 122', text: '#ffedc9' },
-  risky: { hex: 0xff7a5a, css: '255, 122, 90', text: '#ffd9cd' }
+  risky: { hex: 0xff7a5a, css: '255, 122, 90', text: '#ffd9cd' },
+  locked: { hex: 0x9aa8a0, css: '154, 168, 160', text: '#c8d2cc' }
 };
 
 export function makeGate(text, { risk = 'std', pct = null, pay = null, width = 4.7 } = {}) {
@@ -270,7 +360,8 @@ export function makeGate(text, { risk = 'std', pct = null, pay = null, width = 4
   ctx.textAlign = 'center';
   ctx.fillStyle = 'rgba(160, 175, 168, 0.95)';
   ctx.font = '600 22px monospace';
-  const riskTag = risk === 'safe' ? 'LOW RISK' : risk === 'risky' ? 'HIGH RISK' : 'STANDARD';
+  const riskTag = risk === 'locked' ? 'SEALED'
+    : risk === 'safe' ? 'LOW RISK' : risk === 'risky' ? 'HIGH RISK' : 'STANDARD';
   ctx.fillText(`◤ ROUTE — ${riskTag} ◥`, 384, 62);
   // big option text
   const label = text.toUpperCase();

@@ -67,10 +67,12 @@ mission every 15 seconds, with simulated players joining as your squadmates.
 ## Controls
 
 **Desktop** — WASD move · mouse-look (click to lock pointer) · left-click fire ·
-right-click scope/unscope · Space frag.
+right-click scope/unscope · Space frag · N switches to the squad backup weapon
+(SEALs harpoon gun, Green Berets ballistic knife, Delta flashbang launcher,
+Rangers combat shotgun, Sicarios RPG).
 
-**Mobile** — LEFT dynamic joystick: aim (double-tap left side to scope/unscope) ·
-RIGHT dynamic joystick: move · FIRE and FRAG buttons.
+**Mobile** — static LEFT joystick: move · swipe anywhere: look · double-tap:
+scope/unscope · FIRE and FRAG buttons · hold FIRE ~0.8s: switch backup weapon.
 
 ## Development
 

@@ -14,7 +14,16 @@ import { RISK_FACTORS } from '../config.js';
 import { buildWorld } from './world.js';
 import { Effects, sound } from './effects.js';
 import { EnemyBot, Comrade } from './bots.js';
-import { makeVehicle, makeCar, makeCivilian, makeObjectiveProp, makeGate } from './models.js';
+import { makeVehicle, makeCar, makeCivilian, makeObjectiveProp, makeGate, makeBackupViewmodel, animateWalk, poseIdle } from './models.js';
+
+// Squad backup weapons (hold FIRE on mobile / N on desktop to switch)
+const BACKUPS = {
+  harpoon: { name: 'HARPOON GUN', ammo: 10, interval: 1.1 },
+  knife: { name: 'BALLISTIC KNIFE', ammo: 10, interval: 0.7 },
+  flashgl: { name: 'FLASH 40MM', ammo: 6, interval: 1.25 },
+  shotgun: { name: 'COMBAT SHOTGUN', ammo: 14, interval: 0.95 },
+  rpg: { name: 'RPG', ammo: 5, interval: 1.6 }
+};
 import { Controls, IS_TOUCH } from './controls.js';
 import { makeRng } from '../rng.js';
 
@@ -47,6 +56,7 @@ export class Game {
     this.effects = new Effects(this.scene);
     this.controls = new Controls(canvas, controlUi);
     this.controls.onFrag = () => this.throwFrag();
+    this.controls.onWeaponSwitch = () => this.switchWeapon();
     this.controls.onScopeChange = (v) => {
       this.targetFov = v ? SCOPE_FOV : BASE_FOV;
       this.cb.onScope?.(v);
@@ -60,6 +70,7 @@ export class Game {
     this.enemies = [];
     this.comrades = [];
     this.grenades = [];
+    this.projectiles = []; // backup-weapon rounds (bolts, knives, rockets…)
     this.destructibles = []; // set-piece cars / barricades
     this.vehicle = null;
 
@@ -149,8 +160,11 @@ export class Game {
     this.comrades = [];
     for (const g of this.grenades) this.scene.remove(g.mesh);
     this.grenades = [];
+    for (const pr of this.projectiles) this.scene.remove(pr.mesh);
+    this.projectiles = [];
     for (const d of this.destructibles) this.scene.remove(d.group);
     this.destructibles = [];
+    this.clearLockedGates();
     if (this.npc) { this.npc.dispose(); this.npc = null; }
     if (this.objective?.beacon) this.scene.remove(this.objective.beacon);
     this.objective = null;
@@ -159,6 +173,11 @@ export class Game {
       this.gatePhase = null;
     }
     if (this.vehicle) { this.scene.remove(this.vehicle); this.vehicle = null; }
+    if (this.preludeChutes) {
+      for (const c of this.preludeChutes) this.scene.remove(c);
+      this.preludeChutes = null;
+    }
+    this.prelude = null;
     if (this.viewmodel) { this.camera.remove(this.viewmodel); }
     this.effects.clear();
     this.scene.remove(this.camera);
@@ -270,8 +289,24 @@ export class Game {
     return head.clone();
   }
 
+  switchWeapon() {
+    if (this.mode !== 'play' || !this.round) return;
+    this.weaponMode = this.weaponMode === 'backup' ? 'primary' : 'backup';
+    const backup = BACKUPS[this.mission.team.backup];
+    if (this.viewmodelPrimary) this.viewmodelPrimary.visible = this.weaponMode === 'primary';
+    if (this.viewmodelBackup) this.viewmodelBackup.visible = this.weaponMode === 'backup';
+    this.viewmodel = this.weaponMode === 'backup' ? this.viewmodelBackup : this.viewmodelPrimary;
+    sound.click();
+    if (this.weaponMode === 'backup') {
+      this.cb.onWeapon?.(backup.name, this.backupAmmo);
+    } else {
+      this.cb.onWeapon?.('RIFLE', this.player.ammo);
+    }
+  }
+
   buildViewmodel() {
     if (this.viewmodel) this.camera.remove(this.viewmodel);
+    if (this.viewmodelBackup) this.camera.remove(this.viewmodelBackup);
     const g = new THREE.Group();
     const mat = new THREE.MeshLambertMaterial({ color: 0x191c21 });
     const body = new THREE.Mesh(new THREE.BoxGeometry(0.06, 0.09, 0.55), mat);
@@ -284,71 +319,229 @@ export class Game {
     g.add(body, grip, sight, hands);
     g.position.set(0.22, -0.2, -0.45);
     this.viewmodel = g;
+    this.viewmodelPrimary = g;
     this.camera.add(g);
+
+    const backup = makeBackupViewmodel(this.mission.team.backup);
+    backup.position.set(0.22, -0.2, -0.45);
+    backup.visible = false;
+    this.viewmodelBackup = backup;
+    this.camera.add(backup);
+
+    this.weaponMode = 'primary';
+    this.backupAmmo = BACKUPS[this.mission.team.backup].ammo;
+    // weapon stays slung during the insertion ride; raised at the breach
+    g.visible = false;
     this.scene.add(this.camera);
   }
 
+  // ------------------------------------------------------------- prelude
+  //
+  // Insertion cutscene: ride in with the squad seated around you (heads
+  // turning, idling), pull up on a curved approach OUTSIDE the compound,
+  // dismount, stack on the perimeter gate, breach, and walk in — then a
+  // seamless handoff to first-person control at the spawn cell.
+
   startPrelude() {
     this.mode = 'prelude';
-    this.preludeT = 0;
     const type = this.mission.team.vehicle;
-    this.vehicle = makeVehicle(type);
-    this.scene.add(this.vehicle);
-    this.preludeKind = type === 'parachute' ? 'drop' : 'drive';
-
-    // drive in from beyond the fortress perimeter so the vehicle passes
-    // through the gate instead of spawning against the outer wall
     const S = this.map.cellSize;
     const b = this.map.bounds;
     const yaw = this.controls.yaw;
-    const fwd = { x: -Math.sin(yaw), z: -Math.cos(yaw) };
-    const p = this.player.pos;
+    const fwd = new THREE.Vector3(-Math.sin(yaw), 0, -Math.cos(yaw));
+    const lat = new THREE.Vector3(-fwd.z, 0, fwd.x);
+    const start = new THREE.Vector3(this.player.pos.x, 0, this.player.pos.z);
+
     let dWall = 42;
-    if (fwd.z > 0.5) dWall = p.z - (b.minZ - 4) * S;
-    else if (fwd.z < -0.5) dWall = (b.maxZ + 4) * S - p.z;
-    else if (fwd.x > 0.5) dWall = p.x - (b.minX - 4) * S;
-    else if (fwd.x < -0.5) dWall = (b.maxX + 4) * S - p.x;
-    this.driveDist = Math.max(36, dWall + S * 2.5);
-    this.preludeDur = this.preludeKind === 'drop' ? 5.2 : 3.4 + this.driveDist / 26;
+    if (fwd.z > 0.5) dWall = start.z - (b.minZ - 4) * S;
+    else if (fwd.z < -0.5) dWall = (b.maxZ + 4) * S - start.z;
+    else if (fwd.x > 0.5) dWall = start.x - (b.minX - 4) * S;
+    else if (fwd.x < -0.5) dWall = (b.maxX + 4) * S - start.x;
+    const gatePos = start.clone().addScaledVector(fwd, -dWall);
+    const stopPos = start.clone().addScaledVector(fwd, -(dWall + 7));
+
+    if (type === 'parachute') {
+      this.vehicle = makeVehicle('parachute');
+      this.scene.add(this.vehicle);
+      this.preludeChutes = this.comrades.map(() => {
+        const c = makeVehicle('parachute');
+        this.scene.add(c);
+        return c;
+      });
+      this.prelude = { kind: 'drop', t: 0, dur: 6.2, start, yaw };
+    } else {
+      this.vehicle = makeVehicle(type);
+      this.scene.add(this.vehicle);
+      this.prelude = {
+        kind: 'drive', t: 0,
+        ride: 5.2, dismount: 2.3, breach: 0.7, enter: 2.4,
+        p0: stopPos.clone().addScaledVector(fwd, -46).addScaledVector(lat, 26),
+        p1: stopPos.clone().addScaledVector(fwd, -20).addScaledVector(lat, 6),
+        p2: stopPos, gatePos, start, fwd, lat, yaw,
+        breachFired: false,
+        seatCam: new THREE.Vector3(0.4, 1.5, 0.4),
+        seats: [
+          new THREE.Vector3(-0.45, 1.02, 0.55),
+          new THREE.Vector3(0.5, 1.02, -0.6),
+          new THREE.Vector3(-0.5, 1.02, -0.6)
+        ],
+        stack: [
+          gatePos.clone().addScaledVector(fwd, -1.2).addScaledVector(lat, 2.1),
+          gatePos.clone().addScaledVector(fwd, -1.2).addScaledVector(lat, -2.1),
+          gatePos.clone().addScaledVector(fwd, -2.6).addScaledVector(lat, 1.2)
+        ],
+        standPos: gatePos.clone().addScaledVector(fwd, -5.2).addScaledVector(lat, -0.9)
+      };
+    }
     sound.step();
   }
 
-  updatePrelude(dt) {
-    this.preludeT += dt;
-    const t = Math.min(1, this.preludeT / this.preludeDur);
-    const ease = t * t * (3 - 2 * t);
-    const start = this.player.pos;
-    const yaw = this.controls.yaw;
-    const fwd = new THREE.Vector3(-Math.sin(yaw), 0, -Math.cos(yaw));
+  lookToward(target, dt, speed = 3) {
+    const m = new THREE.Matrix4().lookAt(this.camera.position, target, this.camera.up);
+    const q = new THREE.Quaternion().setFromRotationMatrix(m);
+    this.camera.quaternion.slerp(q, Math.min(1, dt * speed));
+  }
 
-    if (this.preludeKind === 'drop') {
-      const alt = (1 - ease) * 55;
-      this.camera.position.set(start.x, EYE + alt, start.z);
-      this.camera.position.x += Math.sin(this.preludeT * 1.3) * (1 - t) * 2.2;
-      this.camera.position.z += Math.cos(this.preludeT * 1.1) * (1 - t) * 2.2;
-      this.camera.rotation.set(-0.5 * (1 - t), yaw, Math.sin(this.preludeT) * 0.06 * (1 - t), 'YXZ');
+  finishPrelude() {
+    const pr = this.prelude;
+    if (this.viewmodelPrimary) this.viewmodelPrimary.visible = true;
+    this.camera.position.set(pr.start.x, EYE, pr.start.z);
+    this.camera.rotation.set(0, this.controls.yaw, 0, 'YXZ');
+    if (this.preludeChutes) {
+      for (const c of this.preludeChutes) this.scene.remove(c);
+      this.preludeChutes = null;
+    }
+    if (pr.kind === 'drop' && this.vehicle) this.vehicle.visible = false;
+    this.prelude = null;
+    this.mode = 'play';
+    this.round.segTime = 0;
+    this.beginSegment(1, true);
+    this.controls.enable();
+    this.cb.onDismount?.();
+  }
+
+  updatePrelude(dt) {
+    const pr = this.prelude;
+    if (!pr) return;
+    pr.t += dt;
+    const t = pr.t;
+    const ease = (v) => THREE.MathUtils.clamp(v, 0, 1) ** 2 * (3 - 2 * THREE.MathUtils.clamp(v, 0, 1));
+
+    if (pr.kind === 'drop') {
+      // static-line jump: the squad floats down around you
+      const e = ease(t / pr.dur);
+      const alt = (1 - e) * 55;
+      const sway = 1 - e;
+      this.camera.position.set(
+        pr.start.x + Math.sin(t * 1.3) * sway * 2.2,
+        EYE + alt,
+        pr.start.z + Math.cos(t * 1.1) * sway * 2.2
+      );
+      this.camera.rotation.set(-0.5 * sway, pr.yaw, Math.sin(t) * 0.06 * sway, 'YXZ');
       this.vehicle.position.copy(this.camera.position);
       this.vehicle.position.y -= 1.4;
-      this.vehicle.rotation.y = yaw;
-      this.vehicle.visible = t < 0.97;
-    } else {
-      const dist = (1 - ease) * (this.driveDist ?? 42);
-      const vpos = tmpV.copy(start).addScaledVector(fwd, -dist - 1.5);
-      const bob = Math.sin(this.preludeT * 9) * 0.05 * (1 - t) + Math.sin(this.preludeT * 2.2) * 0.08;
-      this.vehicle.position.set(vpos.x, 0, vpos.z);
-      this.vehicle.rotation.y = yaw + Math.PI;
-      this.camera.position.set(vpos.x, EYE + 0.35 + bob, vpos.z);
-      this.camera.rotation.set(0, yaw, Math.sin(this.preludeT * 3) * 0.015 * (1 - t), 'YXZ');
+      this.vehicle.rotation.y = pr.yaw;
+      this.vehicle.visible = alt > 2;
+      for (let i = 0; i < this.comrades.length; i++) {
+        const ang = (i / 3) * Math.PI * 2 + 0.7;
+        const cAlt = Math.max(0, alt + 4 + i * 2);
+        const cx = pr.start.x + Math.cos(ang) * 4.5 + Math.sin(t * 1.1 + i) * sway;
+        const cz = pr.start.z + Math.sin(ang) * 4.5 + Math.cos(t * 0.9 + i) * sway;
+        this.comrades[i].setPosition(new THREE.Vector3(cx, cAlt, cz), pr.yaw + Math.PI);
+        const chute = this.preludeChutes[i];
+        chute.position.set(cx, cAlt + 0.1, cz);
+        chute.rotation.y = pr.yaw;
+        chute.visible = cAlt > 1.5;
+      }
+      if (t >= pr.dur) this.finishPrelude();
+      return;
     }
 
-    if (t >= 1) {
-      // dismount
-      if (this.preludeKind === 'drop') this.vehicle.visible = false;
-      this.mode = 'play';
-      this.round.segTime = 0;
-      this.beginSegment(1, true);
-      this.controls.enable();
-      this.cb.onDismount?.();
+    // ---- drive-in cutscene
+    const tRide = pr.ride, tDis = tRide + pr.dismount, tBr = tDis + pr.breach, tEnd = tBr + pr.enter;
+    const bez = (u) => {
+      const w = 1 - u;
+      return new THREE.Vector3(
+        w * w * pr.p0.x + 2 * u * w * pr.p1.x + u * u * pr.p2.x,
+        0,
+        w * w * pr.p0.z + 2 * u * w * pr.p1.z + u * u * pr.p2.z
+      );
+    };
+
+    if (t < tRide) {
+      // riding in: curved pull-up, squad seated, glancing around
+      const u = ease(t / tRide);
+      const pos = bez(u);
+      const ahead = bez(Math.min(1, u + 0.02));
+      tmpV.subVectors(ahead, pos);
+      if (tmpV.lengthSq() > 1e-6) pr.vehYaw = Math.atan2(tmpV.x, tmpV.z);
+      this.vehicle.position.copy(pos);
+      this.vehicle.position.y = Math.abs(Math.sin(t * 6.5)) * 0.04 * (1 - u);
+      this.vehicle.rotation.y = pr.vehYaw ?? pr.yaw;
+      this.vehicle.updateMatrixWorld();
+
+      for (let i = 0; i < this.comrades.length; i++) {
+        const world = this.vehicle.localToWorld(pr.seats[i].clone());
+        const c = this.comrades[i];
+        c.setPosition(world, (pr.vehYaw ?? pr.yaw) + (pr.seats[i].z > 0 ? Math.PI : 0) + Math.sin(t * 0.8 + i * 2.1) * 0.55);
+        poseIdle(c.group, t * 3 + i * 1.7);
+      }
+
+      this.camera.position.copy(this.vehicle.localToWorld(pr.seatCam.clone()));
+      const lookTarget = t < 1.8
+        ? this.comrades[0].group.position.clone().setY(this.comrades[0].group.position.y + 1.5)
+        : t < 3.4
+          ? this.comrades[1].group.position.clone().setY(this.comrades[1].group.position.y + 1.5)
+          : pr.gatePos.clone().setY(1.6);
+      this.lookToward(lookTarget, dt, 2.6);
+    } else if (t < tDis) {
+      // dismount and stack on the gate
+      const tD = t - tRide;
+      for (let i = 0; i < this.comrades.length; i++) {
+        const c = this.comrades[i];
+        const k = ease((tD - i * 0.22) / 1.4);
+        const seatWorld = this.vehicle.localToWorld(pr.seats[i].clone()).setY(0);
+        const pos = new THREE.Vector3().lerpVectors(seatWorld, pr.stack[i], k);
+        const faceYaw = Math.atan2(pr.gatePos.x - pos.x, pr.gatePos.z - pos.z);
+        c.setPosition(pos, faceYaw);
+        if (k > 0.02 && k < 0.98) animateWalk(c.group, t * 6, 1);
+        else poseIdle(c.group, t * 3 + i);
+      }
+      const k = ease(tD / pr.dismount);
+      const seatCamWorld = this.vehicle.localToWorld(pr.seatCam.clone());
+      this.camera.position.lerpVectors(seatCamWorld, pr.standPos.clone().setY(EYE), k);
+      this.lookToward(pr.gatePos.clone().setY(1.4), dt, 3.2);
+    } else if (t < tBr) {
+      // breach charge on the gate — weapons come up
+      if (!pr.breachFired) {
+        pr.breachFired = true;
+        this.effects.explosion(pr.gatePos.clone().setY(1.1));
+        sound.explosion();
+        this.shake = 0.4;
+        if (this.viewmodelPrimary) this.viewmodelPrimary.visible = true;
+      }
+      this.lookToward(pr.gatePos.clone().setY(1.4), dt, 4);
+    } else if (t < tEnd) {
+      // squad pours through the gate; camera walks in behind them
+      const tE = (t - tBr) / pr.enter;
+      const k = ease(tE);
+      for (let i = 0; i < this.comrades.length; i++) {
+        const c = this.comrades[i];
+        const colOffset = this.comradeSlots[i] - this.playerSlot;
+        const slotPos = pr.start.clone().addScaledVector(pr.fwd, -colOffset * COLUMN_SPACING);
+        const kk = ease((t - tBr - i * 0.12) / (pr.enter * 0.85));
+        const pos = new THREE.Vector3().lerpVectors(pr.stack[i], slotPos, kk);
+        c.setPosition(pos, this.controls.yaw + Math.PI);
+        if (kk > 0.02 && kk < 0.98) animateWalk(c.group, t * 6.5, 1.1);
+        else poseIdle(c.group, t * 3 + i);
+      }
+      const camStart = pr.standPos.clone().setY(EYE);
+      const camEnd = pr.start.clone().setY(EYE);
+      this.camera.position.lerpVectors(camStart, camEnd, k);
+      this.camera.position.y = EYE + Math.sin(t * 9) * 0.035;
+      this.lookToward(pr.start.clone().addScaledVector(pr.fwd, 10).setY(1.4), dt, 3.5);
+    } else {
+      this.finishPrelude();
     }
   }
 
@@ -359,12 +552,47 @@ export class Game {
     r.segKills = 0;
     r.lethal = r.pendingBust;
     this.setupObjective(step);
+    this.spawnLockedGates(step);
     const segEnemies = this.enemies.filter((e) => e.seg === step && e.alive);
     r.segEnemyTotal = segEnemies.length;
     for (const e of segEnemies) e.engageDelay = 0.7 + Math.random() * 1.2;
     if (!first) sound.step();
     this.cb.onSegmentStart?.(step, r.lethal);
     this.cb.onObjective?.(this.objective);
+  }
+
+  // Sealed grey gates stand in this checkpoint's doorways from the moment
+  // the segment starts — the "no passage yet" barrier is visible, not
+  // invisible air. They light up into real route gates once the objective
+  // is complete.
+  spawnLockedGates(step) {
+    this.clearLockedGates();
+    if (step >= this.map.segments) return; // exfil room has no route gates
+    const roomCell = this.map.rooms[step - 1];
+    if (!roomCell?.exits) return;
+    const S = this.map.cellSize;
+    const roomPos = new THREE.Vector3(roomCell.x * S, 0, roomCell.z * S);
+    this.lockedGates = [];
+    this.lockedCells = new Set();
+    for (const exit of roomCell.exits) {
+      const gate = makeGate('Objective first', { risk: 'locked', width: 4.7 });
+      gate.position.set(exit.cell.x * S, 0, exit.cell.z * S);
+      gate.rotation.y = Math.atan2(roomPos.x - gate.position.x, roomPos.z - gate.position.z);
+      this.scene.add(gate);
+      this.lockedGates.push(gate);
+      this.lockedCells.add(`${exit.cell.x},${exit.cell.z}`);
+    }
+  }
+
+  clearLockedGates() {
+    if (this.lockedGates) {
+      for (const g of this.lockedGates) {
+        this.scene.remove(g);
+        g.traverse((o) => { o.material?.map?.dispose?.(); o.material?.dispose?.(); o.geometry?.dispose?.(); });
+      }
+    }
+    this.lockedGates = null;
+    this.lockedCells = null;
   }
 
   // ------------------------------------------------------- objectives
@@ -685,6 +913,21 @@ export class Game {
   tryFire(dt) {
     const p = this.player;
     p.fireTimer -= dt;
+
+    if (this.weaponMode === 'backup') {
+      if (!this.controls.firing || p.fireTimer > 0) return;
+      const spec = BACKUPS[this.mission.team.backup];
+      p.fireTimer = spec.interval;
+      if (this.backupAmmo <= 0) {
+        this.switchWeapon(); // dry — back to the rifle
+        return;
+      }
+      this.backupAmmo--;
+      this.cb.onAmmo?.(this.backupAmmo, false);
+      this.fireBackup(this.mission.team.backup);
+      return;
+    }
+
     if (p.reload > 0) {
       p.reload -= dt;
       if (p.reload <= 0) {
@@ -762,6 +1005,202 @@ export class Game {
     }
     this.effects.tracer(muzzle, end, true);
     this.effects.muzzleFlash(muzzle, dir);
+  }
+
+  fireBackup(kind) {
+    this.camera.updateMatrixWorld();
+    const camPos = new THREE.Vector3();
+    this.camera.getWorldPosition(camPos);
+    const dir = new THREE.Vector3();
+    this.camera.getWorldDirection(dir);
+    const muzzle = this.camera.localToWorld(
+      this.controls.scoped ? tmpV.set(0, -0.07, -0.95) : tmpV.set(0.24, -0.15, -1.0)
+    ).clone();
+    this.shake = Math.min(this.shake + (kind === 'rpg' ? 0.35 : 0.18), 0.7);
+    if (this.viewmodel) this.viewmodel.position.z = kind === 'rpg' ? -0.3 : -0.38;
+    this.effects.muzzleFlash(muzzle, dir);
+
+    if (kind === 'shotgun') {
+      sound.burst({ dur: 0.16, freq: 520, gain: 0.42 });
+      const right = new THREE.Vector3().crossVectors(dir, this.camera.up).normalize();
+      const up = new THREE.Vector3().crossVectors(right, dir).normalize();
+      for (let i = 0; i < 7; i++) {
+        const d = dir.clone()
+          .addScaledVector(right, (Math.random() - 0.5) * 0.13)
+          .addScaledVector(up, (Math.random() - 0.5) * 0.09)
+          .normalize();
+        const ray = new THREE.Raycaster(camPos.clone(), d, 0.1, 45);
+        const enemyHits = ray.intersectObjects(this.enemies.filter((e) => e.alive).map((e) => e.group), true);
+        const destrHits = ray.intersectObjects(this.destructibles.filter((dd) => dd.alive).map((dd) => dd.group), true);
+        const wallHit = this.gridCast(camPos, camPos.clone().addScaledVector(d, 45));
+        const wallDist = wallHit ? wallHit.t * 45 : Infinity;
+        const eDist = enemyHits.length ? enemyHits[0].distance : Infinity;
+        const dDist = destrHits.length ? destrHits[0].distance : Infinity;
+        let end;
+        if (eDist < wallDist && eDist <= dDist) {
+          end = enemyHits[0].point;
+          const id = enemyHits[0].object.userData.soldierRoot?.userData.enemyId;
+          const enemy = this.enemies.find((e) => e.id === id);
+          if (enemy) {
+            enemy.engage();
+            const died = enemy.takeHit(this.effects);
+            if (died) this.registerKill(enemy, 'player');
+          }
+        } else if (dDist < wallDist) {
+          end = destrHits[0].point;
+          let node = destrHits[0].object;
+          while (node && !node.userData.destructibleRef) node = node.parent;
+          const dd = node?.userData.destructibleRef;
+          if (dd?.alive && (dd.hp -= 1) <= 0) this.destroyDestructible(dd, 'player');
+          this.effects.hitSpark(end);
+        } else if (wallHit) {
+          end = wallHit.point;
+          this.effects.hitSpark(end);
+        } else {
+          end = camPos.clone().addScaledVector(d, 45);
+        }
+        this.effects.tracer(muzzle, end, true);
+      }
+      return;
+    }
+
+    // projectile weapons
+    let mesh, vel, grav = 0;
+    if (kind === 'harpoon') {
+      mesh = new THREE.Mesh(new THREE.CylinderGeometry(0.015, 0.015, 0.8, 6), new THREE.MeshLambertMaterial({ color: 0x9aa4ac }));
+      mesh.rotation.x = Math.PI / 2;
+      vel = dir.clone().multiplyScalar(46);
+      grav = 2.5;
+      sound.burst({ dur: 0.1, freq: 900, gain: 0.25 });
+    } else if (kind === 'knife') {
+      mesh = new THREE.Mesh(new THREE.BoxGeometry(0.02, 0.05, 0.34), new THREE.MeshLambertMaterial({ color: 0xaeb8be }));
+      vel = dir.clone().multiplyScalar(30);
+      grav = 7;
+      sound.tone({ dur: 0.08, from: 1200, to: 700, gain: 0.09 });
+    } else if (kind === 'flashgl') {
+      mesh = new THREE.Mesh(new THREE.SphereGeometry(0.07, 8, 6), new THREE.MeshLambertMaterial({ color: 0xc8cdd2 }));
+      vel = dir.clone().multiplyScalar(17).add(new THREE.Vector3(0, 2.5, 0));
+      grav = 18;
+      sound.tone({ dur: 0.12, from: 300, to: 150, gain: 0.2, type: 'square' });
+    } else { // rpg
+      mesh = new THREE.Group();
+      const body = new THREE.Mesh(new THREE.CylinderGeometry(0.045, 0.045, 0.45, 8), new THREE.MeshLambertMaterial({ color: 0x3a4034 }));
+      body.rotation.x = Math.PI / 2;
+      const tip = new THREE.Mesh(new THREE.ConeGeometry(0.075, 0.22, 8), new THREE.MeshLambertMaterial({ color: 0x4a5a3a }));
+      tip.rotation.x = -Math.PI / 2;
+      tip.position.z = -0.3;
+      mesh.add(body, tip);
+      vel = dir.clone().multiplyScalar(28);
+      grav = 1;
+      sound.burst({ dur: 0.3, freq: 300, gain: 0.35 });
+    }
+    mesh.position.copy(muzzle);
+    this.scene.add(mesh);
+    this.projectiles.push({ kind, mesh, vel, grav, life: 0, stuck: false, smokeT: 0 });
+  }
+
+  updateProjectiles(dt) {
+    for (let i = this.projectiles.length - 1; i >= 0; i--) {
+      const pr = this.projectiles[i];
+      pr.life += dt;
+      if (pr.stuck) {
+        if (pr.life > 3) { this.scene.remove(pr.mesh); this.projectiles.splice(i, 1); }
+        continue;
+      }
+      if (pr.life > 5) { this.scene.remove(pr.mesh); this.projectiles.splice(i, 1); continue; }
+
+      const prev = pr.mesh.position.clone();
+      pr.vel.y -= pr.grav * dt;
+      pr.mesh.position.addScaledVector(pr.vel, dt);
+      if (pr.kind === 'knife') {
+        pr.mesh.rotation.x += dt * 14;
+      } else {
+        pr.mesh.lookAt(tmpV.copy(pr.mesh.position).add(pr.vel));
+        if (pr.kind === 'harpoon') pr.mesh.rotateX(Math.PI / 2);
+      }
+      if (pr.kind === 'rpg') {
+        pr.smokeT -= dt;
+        if (pr.smokeT <= 0) {
+          pr.smokeT = 0.035;
+          this.effects.smokePuff(prev);
+        }
+      }
+
+      // impacts: enemy > destructible > wall > ground
+      let impact = null;
+      let hitEnemy = null, hitDestr = null;
+      for (const e of this.enemies) {
+        if (!e.alive) continue;
+        if (tmpV.copy(e.group.position).setY(e.group.position.y + 1.1).distanceTo(pr.mesh.position) < 1.0) {
+          hitEnemy = e;
+          impact = pr.mesh.position.clone();
+          break;
+        }
+      }
+      if (!impact) {
+        for (const dd of this.destructibles) {
+          if (dd.alive && dd.pos.distanceTo(pr.mesh.position) < 1.8) {
+            hitDestr = dd;
+            impact = pr.mesh.position.clone();
+            break;
+          }
+        }
+      }
+      if (!impact) {
+        const wallHit = this.gridCast(prev, pr.mesh.position);
+        if (wallHit) impact = wallHit.point;
+        else if (pr.mesh.position.y <= 0.05) impact = pr.mesh.position.clone().setY(0.05);
+      }
+      if (!impact) continue;
+
+      if (pr.kind === 'flashgl') {
+        this.effects.flashBang(impact);
+        sound.explosion();
+        for (const e of this.enemies) {
+          if (e.alive && e.group.position.distanceTo(impact) < 9.5 &&
+              this.losClear(impact.clone().setY(1), e.group.position.clone().setY(1.2))) {
+            e.stunT = 4;
+            e.engage();
+          }
+        }
+        if (this.objective?.mech === 'stealth' && !this.objective.compromised) this.compromiseStealth();
+      } else if (pr.kind === 'rpg') {
+        this.effects.explosion(impact);
+        sound.explosion();
+        this.shake = 0.8;
+        for (const e of this.enemies) {
+          if (e.alive && e.group.position.distanceTo(impact) < 5.5 &&
+              this.losClear(impact.clone().setY(0.8), e.group.position.clone().setY(1.2))) {
+            e.takeHit(this.effects);
+            const died = e.takeHit(this.effects);
+            if (died || !e.alive) this.registerKill(e, 'player');
+          }
+        }
+        for (const dd of this.destructibles) {
+          if (dd.alive && dd.pos.distanceTo(impact) < 5) this.destroyDestructible(dd, 'player');
+        }
+        if (this.objective?.mech === 'stealth' && !this.objective.compromised) this.compromiseStealth();
+      } else {
+        // harpoon / knife: lethal single hit, then the round sticks
+        if (hitEnemy) {
+          hitEnemy.engage();
+          hitEnemy.takeHit(this.effects);
+          const died = hitEnemy.takeHit(this.effects);
+          if (died || !hitEnemy.alive) this.registerKill(hitEnemy, 'player');
+          sound.hit();
+        } else if (hitDestr) {
+          hitDestr.hp -= 2;
+          this.effects.hitSpark(impact);
+          if (hitDestr.hp <= 0) this.destroyDestructible(hitDestr, 'player');
+        }
+        pr.mesh.position.copy(impact);
+        pr.stuck = true;
+        pr.life = 0;
+        continue;
+      }
+      this.scene.remove(pr.mesh);
+      this.projectiles.splice(i, 1);
+    }
   }
 
   throwFrag() {
@@ -881,6 +1320,25 @@ export class Game {
     const p = this.player.pos;
     const step = tmpV.copy(vel).multiplyScalar(dt);
     // axis-separated collision against uncarved cells
+    const S = this.map.cellSize;
+    const solidAt = (px, pz) => {
+      const cell = this.map.cellAt(px, pz);
+      const ck = `${cell.x},${cell.z}`;
+      if (!this.map.isCarved(cell.x, cell.z)) {
+        // courtyard cover blocks only its visible footprint, not the cell
+        if (this.pillarSet.has(ck)) {
+          return Math.abs(px - cell.x * S) < 2.0 && Math.abs(pz - cell.z * S) < 2.0;
+        }
+        return true;
+      }
+      // sealed doorway gates physically hold the line until the objective
+      // is done (the grey gates make this barrier visible)
+      if (this.lockedCells && !this.gatePhase && this.lockedCells.has(ck)) return true;
+      // backstop: the next segment stays sealed until a route is chosen
+      const segOf = this.map.segOfCell(cell.x, cell.z);
+      if (segOf !== undefined && this.round && segOf > this.round.step) return true;
+      return false;
+    };
     const tryAxis = (dx, dz) => {
       const nx = p.x + dx, nz = p.z + dz;
       const pts = [
@@ -888,12 +1346,7 @@ export class Game {
         [nx, nz + PLAYER_RADIUS], [nx, nz - PLAYER_RADIUS]
       ];
       for (const [px, pz] of pts) {
-        const cell = this.map.cellAt(px, pz);
-        if (!this.map.isCarved(cell.x, cell.z)) return false;
-        // the route ahead stays sealed until this checkpoint is cleared —
-        // the decision room is a real boundary, not just a trigger
-        const segOf = this.map.segOfCell(cell.x, cell.z);
-        if (segOf !== undefined && this.round && segOf > this.round.step) return false;
+        if (solidAt(px, pz)) return false;
       }
       p.x = nx; p.z = nz;
       return true;
@@ -1173,6 +1626,7 @@ export class Game {
       this.objective.beacon = null;
     }
 
+    this.clearLockedGates(); // sealed gates light up into route gates
     const S = this.map.cellSize;
     const roomCell = this.map.rooms[r.step - 1];
     const roomPos = new THREE.Vector3(roomCell.x * S, 0, roomCell.z * S);
@@ -1369,6 +1823,7 @@ export class Game {
         this.player.fragTimer = Math.max(0, this.player.fragTimer - dt);
         this.tryFire(dt);
         this.updateGrenades(dt);
+        this.updateProjectiles(dt);
         this.updateGatePhase(dt);
         if (this.mode === 'play') this.updatePlayFlow(dt);
 
@@ -1417,12 +1872,19 @@ export class Game {
       this.shake *= Math.pow(0.02, dt);
     }
 
-    // keep the sun's shadow frustum centered on the action
+    // keep the sun's shadow frustum centered on the action; the sky dome
+    // and sun impostor ride with the camera so their rims never show
     const sun = this.world.userData.sun;
     if (sun) {
       const anchor = this.mode === 'lobby' ? this.camera.position : this.player.pos;
       sun.position.set(anchor.x + 45, 75, anchor.z + 28);
       sun.target.position.set(anchor.x, 0, anchor.z);
+    }
+    const dome = this.world.userData.skyDome;
+    if (dome) dome.position.set(this.camera.position.x, 0, this.camera.position.z);
+    const sunSprite = this.world.userData.sunSprite;
+    if (sunSprite) {
+      sunSprite.position.set(this.camera.position.x + 140, 200, this.camera.position.z + 90);
     }
 
     this.renderer.render(this.scene, this.camera);

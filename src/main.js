@@ -160,8 +160,9 @@ function makeCryptoRng() {
 game.cb.onDismount = () => {
   ui.showHud(true);
   ui.typewriterTitle(`${mission.subtype.toUpperCase()} — ${mission.location.name.toUpperCase()}`);
-  if (!IS_TOUCH) ui.flashMsg('CLICK TO TAKE CONTROL — WASD MOVE · RMB SCOPE · SPACE FRAG', 4200);
-  else ui.flashMsg('LEFT STICK: MOVE · SWIPE: LOOK · 2× TAP: SCOPE', 4200);
+  ui.setWeaponLabel('AMMO');
+  if (!IS_TOUCH) ui.flashMsg('CLICK TO TAKE CONTROL — WASD MOVE · RMB SCOPE · SPACE FRAG · N BACKUP', 4200);
+  else ui.flashMsg('LEFT STICK: MOVE · SWIPE: LOOK · 2× TAP: SCOPE · HOLD FIRE: BACKUP', 4200);
 };
 
 game.cb.onSegmentStart = (step) => {
@@ -170,6 +171,11 @@ game.cb.onSegmentStart = (step) => {
 };
 
 game.cb.onPot = (pot, next) => ui.setPot(pot, next);
+game.cb.onWeapon = (name, ammo) => {
+  ui.setWeaponLabel(name === 'RIFLE' ? 'AMMO' : name.split(' ')[0]);
+  ui.setAmmo(ammo, false);
+  ui.flashMsg(`SWITCHED — ${name}`);
+};
 game.cb.onKill = (k) => ui.setKills(k);
 game.cb.onAmmo = (a, reloading) => ui.setAmmo(a, reloading);
 game.cb.onHealth = (h) => ui.setHealth(h);

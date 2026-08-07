@@ -26,6 +26,7 @@ export class Controls {
     this.onFrag = null;
     this.onScopeChange = null;
     this.onFirstInteract = null;
+    this.onWeaponSwitch = null;
 
     this.keys = new Set();
     this.lookPointer = null; // { id, lx, ly }
@@ -70,6 +71,10 @@ export class Controls {
       if (e.code === 'Space') {
         e.preventDefault();
         this.onFrag?.();
+        return;
+      }
+      if (e.code === 'KeyN' && !e.repeat) {
+        this.onWeaponSwitch?.();
         return;
       }
       this.keys.add(e.code);
@@ -159,10 +164,26 @@ export class Controls {
     layer.addEventListener('pointerup', endPointer);
     layer.addEventListener('pointercancel', endPointer);
 
-    // fire / frag buttons
+    // fire / frag buttons — holding FIRE for ~0.8s switches weapons
     const fire = this.ui.btnFire;
-    const hold = (e) => { e.preventDefault(); this.onFirstInteract?.(); if (this.enabled) this.firing = true; };
-    const release = (e) => { e.preventDefault(); this.firing = false; };
+    const hold = (e) => {
+      e.preventDefault();
+      this.onFirstInteract?.();
+      if (!this.enabled) return;
+      this.firing = true;
+      clearTimeout(this._fireHoldTimer);
+      this._fireHoldTimer = setTimeout(() => {
+        if (this.firing) {
+          this.firing = false;
+          this.onWeaponSwitch?.();
+        }
+      }, 800);
+    };
+    const release = (e) => {
+      e.preventDefault();
+      this.firing = false;
+      clearTimeout(this._fireHoldTimer);
+    };
     fire.addEventListener('pointerdown', hold);
     fire.addEventListener('pointerup', release);
     fire.addEventListener('pointercancel', release);

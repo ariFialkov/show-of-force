@@ -65,6 +65,10 @@ export function setAmmo(a, reloading) {
   els.ammo.textContent = reloading ? '···' : a;
 }
 
+export function setWeaponLabel(name) {
+  document.getElementById('hud-weapon-label').textContent = name;
+}
+
 export function setHealth(h) {
   els.damage.style.opacity = h >= 99 ? 0 : Math.min(1, (100 - h) / 90);
 }

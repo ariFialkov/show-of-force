@@ -34,6 +34,7 @@ export class EnemyBot {
     this.patrolDir = 1;
 
     this.hp = 2;
+    this.stunT = 0;
     this.state = 'patrol'; // patrol | combat | dying | dead
     this.fireTimer = 1 + Math.random() * 1.6;
     this.burstLeft = 0;
@@ -87,6 +88,14 @@ export class EnemyBot {
       return;
     }
     if (this.state === 'dead') return;
+
+    // flash-stunned: dazed in place, can't fight
+    if (this.stunT > 0) {
+      this.stunT -= dt;
+      poseIdle(this.group, this.walkT);
+      this.group.rotation.y += Math.sin(this.walkT * 16) * dt * 1.4;
+      return;
+    }
 
     if (this.state === 'patrol') {
       if (this.patrolTo) {

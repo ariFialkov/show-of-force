@@ -76,6 +76,41 @@ export class Effects {
     });
   }
 
+  // blinding white burst for flashbang rounds
+  flashBang(pos) {
+    const core = new THREE.Mesh(
+      new THREE.SphereGeometry(0.6, 10, 8),
+      new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true })
+    );
+    core.position.copy(pos);
+    this.scene.add(core);
+    this.items.push({
+      mesh: core, life: 0, ttl: 0.55,
+      update: (it) => {
+        const t = it.life / it.ttl;
+        it.mesh.scale.setScalar(1 + t * 14);
+        it.mesh.material.opacity = 0.95 * (1 - t * t);
+      }
+    });
+  }
+
+  smokePuff(pos) {
+    const mesh = new THREE.Mesh(
+      new THREE.SphereGeometry(0.09, 6, 5),
+      new THREE.MeshBasicMaterial({ color: 0xb9bcb6, transparent: true, opacity: 0.5 })
+    );
+    mesh.position.copy(pos);
+    this.scene.add(mesh);
+    this.items.push({
+      mesh, life: 0, ttl: 0.7,
+      update: (it, dt) => {
+        it.mesh.position.y += dt * 0.5;
+        it.mesh.scale.setScalar(1 + it.life * 3);
+        it.mesh.material.opacity = 0.5 * (1 - it.life / it.ttl);
+      }
+    });
+  }
+
   hitSpark(pos) {
     const mesh = new THREE.Mesh(
       new THREE.SphereGeometry(0.06, 5, 4),

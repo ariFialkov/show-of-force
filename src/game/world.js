@@ -135,6 +135,7 @@ export function buildWorld(scene, map, env, rng) {
   skyDome.name = 'skyDome';
   skyDome.renderOrder = -2;
   group.add(skyDome);
+  group.userData.skyDome = skyDome; // recentered on the camera every frame
   if (!env.night) {
     const sunSprite = new THREE.Sprite(new THREE.SpriteMaterial({
       map: sunTexture(), fog: false, transparent: true, depthWrite: false
@@ -143,6 +144,7 @@ export function buildWorld(scene, map, env, rng) {
     sunSprite.position.set(140, 200, 90);
     sunSprite.name = 'sunSprite';
     group.add(sunSprite);
+    group.userData.sunSprite = sunSprite;
   }
 
   // ---- ground
@@ -389,7 +391,7 @@ function buildWatchtowers(group, map, env, rng) {
     const p = rng.pick(map.path);
     const dx = rng.pick([-2, -3, 2, 3]), dz = rng.pick([-2, -3, 2, 3]);
     const x = p.x + dx, z = p.z + dz;
-    if (map.isCarved(x, z)) continue;
+    if (map.isCarved(x, z) || inApproachLane(map, x, z)) continue;
     let touching = false;
     for (let ax = -1; ax <= 1 && !touching; ax++) {
       for (let az = -1; az <= 1; az++) {
@@ -415,6 +417,17 @@ function buildWatchtowers(group, map, env, rng) {
   }
 }
 
+// The squad's insertion vehicle approaches from behind the spawn cell —
+// keep that lane clear of buildings and towers so the ride never clips.
+function inApproachLane(map, x, z) {
+  const a = map.path[0], b2 = map.path[1] ?? a;
+  const dx = Math.sign(b2.x - a.x), dz = Math.sign(b2.z - a.z);
+  const rx = x - a.x, rz = z - a.z;
+  const behind = rx * -dx + rz * -dz;
+  const lateral = Math.abs(rx * dz) + Math.abs(rz * dx);
+  return behind >= -1 && lateral <= 2;
+}
+
 function pickBuildingCells(map, rng, count) {
   const out = [];
   const tried = new Set();
@@ -425,7 +438,7 @@ function pickBuildingCells(map, rng, count) {
     if (Math.abs(dx) < 2 && Math.abs(dz) < 2) continue;
     const x = p.x + dx, z = p.z + dz;
     const k = `${x},${z}`;
-    if (tried.has(k) || map.isCarved(x, z)) continue;
+    if (tried.has(k) || map.isCarved(x, z) || inApproachLane(map, x, z)) continue;
     // don't butt directly against a corridor cell
     let touching = false;
     for (let ax = -1; ax <= 1 && !touching; ax++) {
