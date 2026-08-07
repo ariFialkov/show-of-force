@@ -48,16 +48,27 @@ export function multipliers(steps, rtp = GAME.rtp) {
   return out;
 }
 
-// Draw the whole round outcome up-front.
-// Returns { mults, bustStep } — bustStep is 1-based, null = clears all steps.
-export function drawRound(rng, steps, rtp = GAME.rtp) {
-  const surv = survivalCurve(steps);
+// Build the round's baseline plan. The bust is NOT pre-drawn: because route
+// options modify each step's survival odds (EV-neutrally), the game draws
+// survive/bust per step at the moment the option is committed — an exact
+// martingale, so every strategy's EV is still rtp * bet.
+//   gains[i] = multiplicative rung growth for clearing step i+1
+export function buildPlan(steps, rtp = GAME.rtp) {
+  const survival = survivalCurve(steps);
   const mults = multipliers(steps, rtp);
-  let bustStep = null;
-  for (let i = 0; i < steps; i++) {
-    if (!rng.chance(surv[i])) { bustStep = i + 1; break; }
-  }
-  return { mults, bustStep, survival: surv, steps };
+  const gains = mults.map((m, i) => (i === 0 ? m : m / mults[i - 1]));
+  return { steps, survival, mults, gains };
+}
+
+// Per-step option maths: risk factor a scales survival, payout scales
+// inversely so p * gain is invariant.
+export function optionStats(plan, stepIndex1Based, riskFactor) {
+  const i = stepIndex1Based - 1;
+  const pBase = plan.survival[i];
+  const p = Math.min(0.995, Math.max(0.03, pBase * riskFactor));
+  const aEff = p / pBase;
+  const gain = plan.gains[i] / aEff;
+  return { p, gain };
 }
 
 export function fmtMoney(v) {

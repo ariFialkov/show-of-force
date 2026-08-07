@@ -1,7 +1,7 @@
 import './style.css';
 import { GAME } from './config.js';
 import { generateMission } from './missions.js';
-import { drawRound, fmtMoney } from './rtp.js';
+import { buildPlan, fmtMoney } from './rtp.js';
 import { wallet } from './wallet.js';
 import { Game } from './game/game.js';
 import { IS_TOUCH } from './game/controls.js';
@@ -135,14 +135,14 @@ ui.els.deploy.addEventListener('click', () => {
 });
 
 function startRound() {
-  const plan = drawRound(makeCryptoRng(), mission.steps);
+  const plan = buildPlan(mission.steps);
   ui.buildStepDots(mission.steps);
   ui.setStep(1);
   ui.setPot(0, bet * plan.mults[0]);
   ui.setKills(0);
   ui.setAmmo(30, false);
   ui.setHealth(100);
-  game.startRound({ bet, plan });
+  game.startRound({ bet, plan, rng: makeCryptoRng() });
 }
 
 // Round outcomes must not depend on the map seed — draw from fresh entropy.
@@ -181,14 +181,14 @@ game.cb.onGatePhase = ({ step, pot, canCash }) => {
     maxSteps: mission.steps,
     pot,
     canCash,
-    nextMult: game.round.plan.mults[step], // multiplier if the next step survives
+    nextMult: null, // each route gate shows its own odds and payout
     isTouch: IS_TOUCH
   }, () => game.cashOut());
 };
 
-game.cb.onGateChoice = (choice) => {
+game.cb.onGateChoice = (choice, slot) => {
   ui.hideCashBanner();
-  ui.flashMsg(`ROGER — ${choice.toUpperCase()}`);
+  ui.flashMsg(`ROGER — ${choice.toUpperCase()} (${slot.pct}%)`);
 };
 
 // desktop: pointer stays locked at the gates, so cash out on [C]

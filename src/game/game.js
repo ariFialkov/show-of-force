@@ -9,6 +9,8 @@
 
 import * as THREE from 'three';
 import { generateMap } from './mapgen.js';
+import { optionStats } from '../rtp.js';
+import { RISK_FACTORS } from '../config.js';
 import { buildWorld } from './world.js';
 import { Effects, sound } from './effects.js';
 import { EnemyBot, Comrade } from './bots.js';
@@ -162,11 +164,18 @@ export class Game {
 
   // ------------------------------------------------------------- round
 
-  startRound({ bet, plan }) {
+  startRound({ bet, plan, rng }) {
+    this.rng = rng; // fresh-entropy chance() for per-step outcome draws
     this.round = {
       bet,
-      plan,                    // { mults, bustStep }
+      plan,                    // { mults, survival, gains, steps }
       step: 1,
+      // rung bookkeeping: curRung = multiplier secured at the last
+      // checkpoint; rungTarget = what the current step is playing for.
+      // Route-option risk modifies each step's (p, gain) EV-neutrally.
+      curRung: 0,
+      rungTarget: plan.mults[0],
+      pendingBust: !rng.chance(plan.survival[0]),
       pot: 0,
       kills: 0,
       segKills: 0,
@@ -346,7 +355,7 @@ export class Game {
     r.step = step;
     r.segTime = 0;
     r.segKills = 0;
-    r.lethal = r.plan.bustStep === step;
+    r.lethal = r.pendingBust;
     this.setupObjective(step);
     const segEnemies = this.enemies.filter((e) => e.seg === step && e.alive);
     r.segEnemyTotal = segEnemies.length;
@@ -656,9 +665,9 @@ export class Game {
     if (!this.gatePhase || this.round.over) return 0;
     const r = this.round;
     // below-stake rungs cannot be cashed — the UI disables the button too
-    if (r.plan.mults[r.step - 1] < 1) return 0;
+    if (r.curRung < 1) return 0;
     r.over = true;
-    const payout = r.bet * r.plan.mults[r.step - 1];
+    const payout = r.bet * r.curRung;
     for (const g of this.gatePhase.gates) this.scene.remove(g);
     this.gatePhase = null;
     this.mode = 'extract';
@@ -1055,8 +1064,8 @@ export class Game {
 
     // pot presentation: creep toward the next rung with objective + travel
     // progress (starts from 0 — nothing is secured until checkpoint 1)
-    const prevMult = r.step === 1 ? 0 : r.plan.mults[r.step - 2];
-    const nextMult = r.plan.mults[r.step - 1];
+    const prevMult = r.curRung;
+    const nextMult = r.rungTarget;
     const room = this.currentRoomCenter();
     let distFrac = 0;
     if (room) {
@@ -1137,7 +1146,8 @@ export class Game {
 
   enterGatePhase() {
     const r = this.round;
-    r.pot = r.bet * r.plan.mults[r.step - 1];
+    r.curRung = r.rungTarget; // this rung is now secured
+    r.pot = r.bet * r.curRung;
     this.cb.onPot?.(r.pot, r.pot);
     // wrap up segment furniture: secure the asset, clear the site beacon
     if (this.npc) {
@@ -1150,32 +1160,59 @@ export class Game {
       this.objective.beacon = null;
     }
 
-    // room exit frame: continuation direction from the room center
     const S = this.map.cellSize;
     const roomCell = this.map.rooms[r.step - 1];
-    const roomIdx = this.map.path.findIndex((p) => p.seg === r.step && p.x === roomCell.x && p.z === roomCell.z);
-    const contCell = this.map.path[roomIdx + 1] ?? { x: roomCell.x, z: roomCell.z + 1 };
-    const h = new THREE.Vector3(Math.sign(contCell.x - roomCell.x), 0, Math.sign(contCell.z - roomCell.z));
-    if (h.lengthSq() === 0) h.set(0, 1, 0);
-    const lat = new THREE.Vector3(h.z, 0, -h.x);
-    const mid = new THREE.Vector3(roomCell.x * S + h.x * S, 0, roomCell.z * S + h.z * S);
+    const roomPos = new THREE.Vector3(roomCell.x * S, 0, roomCell.z * S);
+    const exits = roomCell.exits ?? [];
+    const options = this.mission.decisions?.[r.step - 1] ??
+      [{ t: 'Push forward', risk: 'std' }, { t: 'Flank around', risk: 'std' }, { t: 'Go loud', risk: 'risky' }];
 
-    const options = this.mission.decisions?.[r.step - 1] ?? [{ t: 'Push forward' }, { t: 'Flank around' }];
-    const gA = makeGate(options[0].t);
-    const gB = makeGate(options[1].t);
-    gA.position.copy(mid).addScaledVector(lat, -1.55);
-    gB.position.copy(mid).addScaledVector(lat, 1.55);
-    const faceYaw = Math.atan2(-h.x, -h.z) + Math.PI;
-    gA.rotation.y = faceYaw;
-    gB.rotation.y = faceYaw;
-    this.scene.add(gA, gB);
+    const gates = [];
+    const slots = [];
+    const nextStep = r.step + 1;
+    const fmtPay = (gain) => '$' + (r.bet * r.curRung * gain).toFixed(2);
 
-    this.gatePhase = { gates: [gA, gB], options, mid, h, lat, t: 0 };
+    const buildSlot = (opt) => {
+      const { p, gain } = optionStats(r.plan, nextStep, RISK_FACTORS[opt.risk] ?? 1);
+      return { t: opt.t, risk: opt.risk, p, gain, pct: Math.round(p * 100) };
+    };
+
+    if (exits.length >= 2) {
+      // one gate per doorway, filling the corridor entrance
+      for (let i = 0; i < exits.length && i < options.length; i++) {
+        const slot = buildSlot(options[i]);
+        const gate = makeGate(slot.t, { risk: slot.risk, pct: slot.pct, pay: fmtPay(slot.gain), width: 4.7 });
+        const cell = exits[i].cell;
+        gate.position.set(cell.x * S, 0, cell.z * S);
+        gate.rotation.y = Math.atan2(roomPos.x - gate.position.x, roomPos.z - gate.position.z);
+        this.scene.add(gate);
+        gates.push(gate);
+        slots.push({ ...slot, cell });
+      }
+      this.gatePhase = { mode: 'doorways', gates, slots, t: 0 };
+    } else {
+      // fallback: single doorway — two gates side by side inside it
+      const exit = exits[0] ?? { dir: { x: 0, z: 1 }, cell: { x: roomCell.x, z: roomCell.z + 2 } };
+      const h = new THREE.Vector3(exit.dir.x, 0, exit.dir.z);
+      const lat = new THREE.Vector3(h.z, 0, -h.x);
+      const mid = new THREE.Vector3(exit.cell.x * S, 0, exit.cell.z * S);
+      for (let i = 0; i < 2; i++) {
+        const slot = buildSlot(options[i]);
+        const gate = makeGate(slot.t, { risk: slot.risk, pct: slot.pct, pay: fmtPay(slot.gain), width: 2.6 });
+        gate.position.copy(mid).addScaledVector(lat, i === 0 ? -1.45 : 1.45);
+        gate.rotation.y = Math.atan2(roomPos.x - mid.x, roomPos.z - mid.z);
+        this.scene.add(gate);
+        gates.push(gate);
+        slots.push(slot);
+      }
+      this.gatePhase = { mode: 'split', gates, slots, mid, h, lat, t: 0 };
+    }
+
     sound.step();
     this.cb.onGatePhase?.({
       step: r.step,
       pot: r.pot,
-      canCash: r.plan.mults[r.step - 1] >= 1,
+      canCash: r.curRung >= 1,
       nextTitle: this.mission.objectives?.[r.step]?.title ?? null
     });
   }
@@ -1195,12 +1232,24 @@ export class Game {
         g.userData.frameMat.opacity = 0.5 + Math.sin(gp.t * 2.3 + i * 0.7) * 0.2;
       }
     }
-    // crossing the gate line makes the call
     const p = this.player.pos;
-    const d = (p.x - gp.mid.x) * gp.h.x + (p.z - gp.mid.z) * gp.h.z;
-    if (d > 0.35) {
-      const side = (p.x - gp.mid.x) * gp.lat.x + (p.z - gp.mid.z) * gp.lat.z;
-      this.chooseGate(side >= 0 ? 1 : 0);
+    if (gp.mode === 'doorways') {
+      // stepping into a doorway cell makes the call
+      const pc = this.map.cellAt(p.x, p.z);
+      for (let i = 0; i < gp.slots.length; i++) {
+        const c = gp.slots[i].cell;
+        if (pc.x === c.x && pc.z === c.z) {
+          this.chooseGate(i);
+          return;
+        }
+      }
+    } else {
+      // split mode: crossing the doorway line picks the nearer gate
+      const d = (p.x - gp.mid.x) * gp.h.x + (p.z - gp.mid.z) * gp.h.z;
+      if (d > -2.2) {
+        const side = (p.x - gp.mid.x) * gp.lat.x + (p.z - gp.mid.z) * gp.lat.z;
+        this.chooseGate(side >= 0 ? 1 : 0);
+      }
     }
   }
 
@@ -1211,17 +1260,23 @@ export class Game {
       this.scene.remove(g);
       g.traverse((o) => { o.material?.map?.dispose?.(); o.material?.dispose?.(); o.geometry?.dispose?.(); });
     }
-    const choice = gp.options[idx]?.t ?? 'Push forward';
+    const slot = gp.slots[idx] ?? gp.slots[0];
+    const r = this.round;
+    // commit the option: draw this step's outcome at its true odds and set
+    // the rung it plays for — EV is identical across options
+    r.pendingBust = !this.rng.chance(slot.p);
+    r.rungTarget = r.curRung * slot.gain;
     this.gatePhase = null;
     sound.click();
-    this.cb.onGateChoice?.(choice);
-    this.beginSegment(this.round.step + 1);
+    this.cb.onGateChoice?.(slot.t, slot);
+    this.beginSegment(r.step + 1);
   }
 
   finishRoundWin() {
     const r = this.round;
     r.over = true;
-    r.pot = r.bet * r.plan.mults[this.map.segments - 1];
+    r.curRung = r.rungTarget;
+    r.pot = r.bet * r.curRung;
     this.mode = 'extract';
     this.controls.disable();
     if (document.pointerLockElement) document.exitPointerLock?.();

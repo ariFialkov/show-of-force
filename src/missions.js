@@ -65,12 +65,17 @@ function buildObjectives(rng, typeId, steps) {
   return out.slice(0, steps);
 }
 
-// Decision at checkpoint i previews objective i+1 — the two options are
-// approaches to the fight that's actually coming.
+// Decision at checkpoint i previews objective i+1. Three approach options
+// are prepared per decision — one per risk class where possible — and the
+// checkpoint room's doorway count (2-3) decides how many are offered.
 function buildDecisions(rng, objectives) {
   return objectives.slice(1).map((obj) => {
-    const pair = rng.pick(APPROACH[obj.mech] ?? APPROACH.sweep);
-    return [{ t: pair[0] }, { t: pair[1] }];
+    const pool = APPROACH[obj.mech] ?? APPROACH.sweep;
+    const byRisk = (r) => {
+      const c = pool.filter((o) => o.risk === r);
+      return c.length > 0 ? rng.pick(c) : rng.pick(pool);
+    };
+    return rng.shuffle([byRisk('safe'), byRisk('std'), byRisk('risky')]);
   });
 }
 

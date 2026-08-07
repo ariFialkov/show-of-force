@@ -324,43 +324,58 @@ export const OBJECTIVE_ARCS = {
   }
 };
 
-// Decision options describe HOW to take on the next objective — the pick is
-// flavor (the objective is fixed), but the text matches what comes next.
+// Decision options describe HOW to take on the next objective, and each
+// carries a RISK class. Risk scales that step's true survival odds by the
+// factor below, with the step's payout gain scaled inversely — so every
+// option has identical EV and the RTP is untouched by the choice.
+export const RISK_FACTORS = { safe: 1.08, std: 1.0, risky: 0.78 };
+
 export const APPROACH = {
   sweep: [
-    ['Stack up and breach', 'Sweep in from the flank'],
-    ['Go in loud', 'Split and pincer them'],
-    ['Clear it room by room', 'Push straight up the middle']
+    { t: 'Sweep in from the flank', risk: 'safe' },
+    { t: 'Clear it room by room', risk: 'safe' },
+    { t: 'Stack up and breach', risk: 'std' },
+    { t: 'Split and pincer them', risk: 'std' },
+    { t: 'Go in loud', risk: 'risky' },
+    { t: 'Push straight up the middle', risk: 'risky' }
   ],
   destroy: [
-    ['Frag it from cover', 'Close in and hose it down'],
-    ['Hit it from the alley', 'Overwatch and volley fire'],
-    ['Charge the position', 'Pick off the guards first']
+    { t: 'Pick off the guards first', risk: 'safe' },
+    { t: 'Frag it from cover', risk: 'safe' },
+    { t: 'Overwatch and volley fire', risk: 'std' },
+    { t: 'Hit it from the alley', risk: 'std' },
+    { t: 'Charge and hose it down', risk: 'risky' }
   ],
   hvt: [
-    ['Close for the confirmed kill', 'Drop him from range'],
-    ['Cut off his escape first', 'Take the shot on sight']
+    { t: 'Drop him from range', risk: 'safe' },
+    { t: 'Cut off his escape first', risk: 'std' },
+    { t: 'Close for the confirmed kill', risk: 'risky' }
   ],
   stealth: [
-    ['Hug the shadows left', 'Take the drainage line right'],
-    ['Crawl the wall line', 'Time the patrol gaps'],
-    ['Move on my count', 'Ghost through one at a time']
+    { t: 'Time the patrol gaps', risk: 'safe' },
+    { t: 'Hug the shadow line', risk: 'std' },
+    { t: 'Crawl the drainage line', risk: 'std' },
+    { t: 'Ghost straight through', risk: 'risky' }
   ],
   interact: [
-    ['Cover me while I work', 'Secure the area first'],
-    ['I take the device, you hold', 'Fast hands, watch the door']
+    { t: 'Secure the area first', risk: 'safe' },
+    { t: 'Cover me while I work', risk: 'std' },
+    { t: 'Fast hands, no cover', risk: 'risky' }
   ],
   hold: [
-    ['Fortify the center', 'Anchor the corners'],
-    ['Dig in behind cover', 'Meet them at the mouth']
+    { t: 'Dig in behind cover', risk: 'safe' },
+    { t: 'Anchor the corners', risk: 'std' },
+    { t: 'Meet them at the mouth', risk: 'risky' }
   ],
   timed: [
-    ['Straight sprint, no stops', 'Cut through the side lanes'],
-    ['Run and gun', 'Bounds by pairs, fast']
+    { t: 'Bounds by pairs, steady', risk: 'safe' },
+    { t: 'Cut through the side lanes', risk: 'std' },
+    { t: 'Dead sprint, no stops', risk: 'risky' }
   ],
   escort: [
-    ['Keep the asset close', 'Bound ahead and clear'],
-    ['Shield the package', 'Speed over caution']
+    { t: 'Shield the package', risk: 'safe' },
+    { t: 'Keep the asset close', risk: 'std' },
+    { t: 'Speed over caution', risk: 'risky' }
   ]
 };
 

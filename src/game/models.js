@@ -187,82 +187,98 @@ export function makeCivilian(shirtColor = 0x7a6a4a) {
 
 // ------------------------------------------------------- decision gates
 
-// Holographic route gate: a glimmering frame with a floating option label,
-// styled like a modern military HUD projection.
-export function makeGate(text) {
+// Holographic route gate: a glimmering doorway-filling frame with a large
+// floating option label plus its true odds and payout, styled like a
+// modern military HUD projection. Risk class tints the whole gate.
+const GATE_ACCENTS = {
+  safe: { hex: 0x7dffa0, css: '125, 255, 160', text: '#d6ffe2' },
+  std: { hex: 0xffd27a, css: '255, 210, 122', text: '#ffedc9' },
+  risky: { hex: 0xff7a5a, css: '255, 122, 90', text: '#ffd9cd' }
+};
+
+export function makeGate(text, { risk = 'std', pct = null, pay = null, width = 4.7 } = {}) {
   const g = new THREE.Group();
-  const accent = 0x7dffa0;
+  const accent = GATE_ACCENTS[risk] ?? GATE_ACCENTS.std;
+  const half = width / 2;
 
   const frameMat = new THREE.MeshBasicMaterial({
-    color: accent, transparent: true, opacity: 0.55, depthWrite: false
+    color: accent.hex, transparent: true, opacity: 0.55, depthWrite: false
   });
-  const postL = new THREE.Mesh(new THREE.BoxGeometry(0.06, 2.45, 0.06), frameMat);
-  postL.position.set(-1.32, 1.22, 0);
+  const postL = new THREE.Mesh(new THREE.BoxGeometry(0.09, 3.0, 0.09), frameMat);
+  postL.position.set(-half, 1.5, 0);
   const postR = postL.clone();
-  postR.position.x = 1.32;
-  const topBar = new THREE.Mesh(new THREE.BoxGeometry(2.7, 0.055, 0.055), frameMat);
-  topBar.position.y = 2.45;
-  const ring = new THREE.Mesh(
-    new THREE.RingGeometry(1.05, 1.3, 26),
-    new THREE.MeshBasicMaterial({ color: accent, transparent: true, opacity: 0.3, side: THREE.DoubleSide, depthWrite: false })
+  postR.position.x = half;
+  const topBar = new THREE.Mesh(new THREE.BoxGeometry(width + 0.1, 0.08, 0.08), frameMat);
+  topBar.position.y = 3.0;
+  const sill = new THREE.Mesh(
+    new THREE.BoxGeometry(width, 0.05, 0.4),
+    new THREE.MeshBasicMaterial({ color: accent.hex, transparent: true, opacity: 0.22, depthWrite: false })
   );
-  ring.rotation.x = -Math.PI / 2;
-  ring.position.y = 0.05;
-  g.add(postL, postR, topBar, ring);
+  sill.position.y = 0.03;
+  g.add(postL, postR, topBar, sill);
 
-  // floating label, drawn to canvas
+  // label plate, drawn to canvas
   const c = document.createElement('canvas');
-  c.width = 512; c.height = 144;
+  c.width = 768; c.height = 256;
   const ctx = c.getContext('2d');
-  ctx.clearRect(0, 0, 512, 144);
-  // translucent backing plate with cut corners
-  ctx.fillStyle = 'rgba(6, 14, 10, 0.72)';
+  ctx.clearRect(0, 0, 768, 256);
+  ctx.fillStyle = 'rgba(6, 14, 10, 0.78)';
   ctx.beginPath();
-  ctx.moveTo(26, 22); ctx.lineTo(486, 22); ctx.lineTo(500, 36); ctx.lineTo(500, 108);
-  ctx.lineTo(486, 122); ctx.lineTo(26, 122); ctx.lineTo(12, 108); ctx.lineTo(12, 36);
+  ctx.moveTo(36, 26); ctx.lineTo(732, 26); ctx.lineTo(752, 46); ctx.lineTo(752, 210);
+  ctx.lineTo(732, 230); ctx.lineTo(36, 230); ctx.lineTo(16, 210); ctx.lineTo(16, 46);
   ctx.closePath();
   ctx.fill();
-  ctx.strokeStyle = 'rgba(125, 255, 160, 0.9)';
-  ctx.lineWidth = 2.5;
+  ctx.strokeStyle = `rgba(${accent.css}, 0.95)`;
+  ctx.lineWidth = 3.5;
   ctx.stroke();
   // corner brackets
-  ctx.lineWidth = 4;
-  for (const [x, sx] of [[6, 1], [506, -1]]) {
+  ctx.lineWidth = 6;
+  for (const [x, sx] of [[8, 1], [760, -1]]) {
     ctx.beginPath();
-    ctx.moveTo(x + sx * 22, 12); ctx.lineTo(x, 12); ctx.lineTo(x, 34);
-    ctx.moveTo(x + sx * 22, 132); ctx.lineTo(x, 132); ctx.lineTo(x, 110);
+    ctx.moveTo(x + sx * 34, 12); ctx.lineTo(x, 12); ctx.lineTo(x, 44);
+    ctx.moveTo(x + sx * 34, 244); ctx.lineTo(x, 244); ctx.lineTo(x, 212);
     ctx.stroke();
   }
-  // caption + option text with glow
   ctx.textAlign = 'center';
-  ctx.fillStyle = 'rgba(143, 160, 152, 0.95)';
-  ctx.font = '600 17px monospace';
-  ctx.fillText('◤ ROUTE OPTION ◥', 256, 46);
+  ctx.fillStyle = 'rgba(160, 175, 168, 0.95)';
+  ctx.font = '600 22px monospace';
+  const riskTag = risk === 'safe' ? 'LOW RISK' : risk === 'risky' ? 'HIGH RISK' : 'STANDARD';
+  ctx.fillText(`◤ ROUTE — ${riskTag} ◥`, 384, 62);
+  // big option text
   const label = text.toUpperCase();
-  let size = 40;
+  let size = 58;
   ctx.font = `700 ${size}px monospace`;
-  while (ctx.measureText(label).width > 440 && size > 20) {
+  while (ctx.measureText(label).width > 660 && size > 26) {
     size -= 2;
     ctx.font = `700 ${size}px monospace`;
   }
-  ctx.shadowColor = 'rgba(125, 255, 160, 0.95)';
-  ctx.shadowBlur = 16;
-  ctx.fillStyle = '#d6ffe2';
-  ctx.fillText(label, 256, 96);
+  ctx.shadowColor = `rgba(${accent.css}, 0.95)`;
+  ctx.shadowBlur = 22;
+  ctx.fillStyle = accent.text;
+  ctx.fillText(label, 384, 138);
   ctx.shadowBlur = 0;
+  // odds + payout line
+  if (pct !== null) {
+    ctx.font = '700 40px monospace';
+    ctx.shadowBlur = 12;
+    ctx.shadowColor = `rgba(${accent.css}, 0.8)`;
+    ctx.fillStyle = '#ffffff';
+    ctx.fillText(`SUCCESS ${pct}%   ▸   PAYS ${pay}`, 384, 202);
+    ctx.shadowBlur = 0;
+  }
 
   const tex = new THREE.CanvasTexture(c);
   const textMesh = new THREE.Mesh(
-    new THREE.PlaneGeometry(3.1, 0.87),
+    new THREE.PlaneGeometry(4.35, 1.45),
     new THREE.MeshBasicMaterial({
-      map: tex, transparent: true, opacity: 0.92,
+      map: tex, transparent: true, opacity: 0.94,
       side: THREE.DoubleSide, depthWrite: false
     })
   );
-  textMesh.position.y = 1.9;
+  textMesh.position.y = 1.85;
   g.add(textMesh);
 
-  g.userData = { textMesh, textY: 1.9, frameMat };
+  g.userData = { textMesh, textY: 1.85, frameMat };
   return g;
 }
 

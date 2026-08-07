@@ -205,7 +205,7 @@ function carveSwitchback(b, rng, seg) {
 
 // ------------------------------------------------------- decision rooms
 
-function carveDecisionRoom(b, rng, seg, withDecoys) {
+function carveDecisionRoom(b, rng, seg, withExits) {
   const h = b.heading;
   const roomFwd = { x: b.cur.x + h.x, z: b.cur.z + h.z };
   const room = { x: roomFwd.x + h.x, z: roomFwd.z + h.z, seg };
@@ -222,22 +222,71 @@ function carveDecisionRoom(b, rng, seg, withDecoys) {
   b.path.push({ ...room, seg });
   b.rooms.push(room);
 
-  if (withDecoys) {
-    // 1-2 decoy branches off the room, length 2-4, sometimes ending in a pocket
-    const sides = rng.shuffle([
-      { x: h.z, z: -h.x }, { x: -h.z, z: h.x }, { x: -h.x, z: -h.z }
-    ]);
-    const nDecoys = rng.chance(0.55) ? 2 : 1;
-    for (let d = 0; d < nDecoys && d < sides.length; d++) {
-      carveDecoy(b, rng, sides[d], room, roomCells);
-    }
+  if (!withExits) return true; // final room is the exfil pad — no exits
 
-    // continue main path out the far side of the room — the room spans
-    // room±1, so the first fresh cell is two out from the center
-    b.cur = { x: room.x + h.x * 2, z: room.z + h.z * 2 };
-    if (b.carved.has(key(b.cur.x, b.cur.z))) return false;
-    carve(b, b.cur.x, b.cur.z);
-    b.path.push({ ...b.cur, seg });
+  // Forward exit doorway M and junction J where the next segment resumes.
+  // Side exits carve a real detour corridor that loops around and rejoins
+  // at J — every doorway is a genuine pathway.
+  const M = { x: room.x + h.x * 2, z: room.z + h.z * 2 };
+  const J = { x: room.x + h.x * 3, z: room.z + h.z * 3 };
+  if (b.carved.has(key(M.x, M.z)) || b.carved.has(key(J.x, J.z))) return false;
+  if (!clearExcept(b, M, roomCells) || !clearExcept(b, J, new Set([key(M.x, M.z)]))) return false;
+  carve(b, M.x, M.z);
+  carve(b, J.x, J.z);
+  b.path.push({ ...M, seg }, { ...J, seg });
+
+  const exits = [{ dir: { ...h }, cell: M }];
+  const sides = rng.shuffle([{ x: h.z, z: -h.x }, { x: -h.z, z: h.x }]);
+  const wantTwo = rng.chance(0.3);
+  for (const s of sides) {
+    if (exits.length >= (wantTwo ? 3 : 2)) break;
+    const doorway = carveSideExit(b, room, h, s, J, roomCells, seg);
+    if (doorway) exits.push({ dir: { ...s }, cell: doorway });
+  }
+
+  if (exits.length === 1) {
+    // no room for a real fork — keep a decoy stub for the maze feel;
+    // the gate phase falls back to side-by-side gates in this doorway
+    carveDecoy(b, rng, sides[0], room, roomCells);
+  }
+
+  room.exits = exits;
+  room.junction = J;
+  b.cur = { ...J };
+  b.heading = h;
+  return true;
+}
+
+// Detour corridor: out the side doorway, forward alongside the room with a
+// one-cell wall gap, then back in to the junction.
+function carveSideExit(b, room, h, s, J, roomCells, seg) {
+  const at = (ls, lh) => ({ x: room.x + s.x * ls + h.x * lh, z: room.z + s.z * ls + h.z * lh });
+  const cells = [at(2, 0), at(3, 0), at(3, 1), at(3, 2), at(3, 3), at(2, 3), at(1, 3)];
+  const allowed = new Set([...roomCells, key(J.x, J.z), key(room.x + h.x * 2, room.z + h.z * 2)]);
+  for (const c of cells) allowed.add(key(c.x, c.z));
+  for (const c of cells) {
+    if (b.carved.has(key(c.x, c.z))) return null;
+    for (let dx = -1; dx <= 1; dx++) {
+      for (let dz = -1; dz <= 1; dz++) {
+        const k = key(c.x + dx, c.z + dz);
+        if (b.carved.has(k) && !allowed.has(k)) return null;
+      }
+    }
+  }
+  for (const c of cells) {
+    carve(b, c.x, c.z);
+    b.path.push({ ...c, seg });
+  }
+  return cells[0]; // the doorway cell
+}
+
+function clearExcept(b, cell, allowed) {
+  for (let dx = -1; dx <= 1; dx++) {
+    for (let dz = -1; dz <= 1; dz++) {
+      if (dx === 0 && dz === 0) continue;
+      const k = key(cell.x + dx, cell.z + dz);
+      if (b.carved.has(k) && !allowed.has(k)) return false;
+    }
   }
   return true;
 }

@@ -27,8 +27,14 @@ map, icon, and sound is generated procedurally at runtime.
     value itself is fixed by the ladder.
   - If the current step is the bust step, the squad is overrun and the round
     ends regardless of player skill.
-- At every decision point you get two tactical options (both continue the
-  mission) plus **Cash Out** at the current secured amount.
+- Decision rooms have 2 (sometimes 3) real exit pathways, each covered by a
+  holographic route gate showing the option, its TRUE success odds, and the
+  payout for clearing the step — walking through a gate is the decision.
+  A banner offers **Cash Out** at the secured amount before you cross.
+- Route options carry risk classes (safe / standard / risky) that scale the
+  step's survival odds with an exactly inverse payout scale, so every
+  option has identical EV — the outcome is drawn per step at the committed
+  odds the moment you cross the gate.
 - Missions vary in length by type (assassinations run 3-5 checkpoints,
   escorts 7-10) — every length pays the same ~×4.30 max, so short missions
   have chunkier, riskier steps.
