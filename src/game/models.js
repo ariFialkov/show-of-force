@@ -59,6 +59,9 @@ export function makeSoldier(camo) {
 
   g.userData.parts = { legL, legR, armL, armR, torso, head, rifle, muzzle };
   g.traverse((o) => { o.userData.soldierRoot = g; });
+  // scale to human height (~1.75m) so soldiers stand eye-to-eye with the
+  // first-person camera
+  g.scale.setScalar(1.32);
   return g;
 }
 
@@ -168,6 +171,32 @@ function makeHeli() {
   skidL.position.set(-0.7, 0.25, 0);
   skidR.position.set(0.7, 0.25, 0);
   g.add(body, tail, rotor, skidL, skidR);
+  return g;
+}
+
+// Hostile technical / getaway car for the 'car' set-piece. Returns a group
+// with userData.wreck() that chars it into a burnt-out husk.
+export function makeCar(rng) {
+  const g = new THREE.Group();
+  const paint = rng?.pick?.([0x7a2f28, 0x2f4a5c, 0x777d6a, 0x40403c]) ?? 0x7a2f28;
+  const body = box(1.7, 0.55, 3.9, paint);
+  body.position.y = 0.62;
+  const cabin = box(1.55, 0.5, 1.9, paint);
+  cabin.position.set(0, 1.08, -0.25);
+  const glass = box(1.45, 0.34, 1.75, 0x1c262e);
+  glass.position.set(0, 1.12, -0.25);
+  const bumperF = box(1.75, 0.22, 0.25, 0x22242a);
+  bumperF.position.set(0, 0.42, 2.0);
+  const bumperB = bumperF.clone();
+  bumperB.position.z = -2.0;
+  g.add(body, cabin, glass, bumperF, bumperB);
+  wheels(g, [[-0.88, 0.34, 1.3], [0.88, 0.34, 1.3], [-0.88, 0.34, -1.3], [0.88, 0.34, -1.3]], 0.34);
+  g.userData.wreck = () => {
+    g.traverse((o) => {
+      if (o.isMesh) o.material = new THREE.MeshLambertMaterial({ color: 0x181614 });
+    });
+    g.scale.y = 0.72;
+  };
   return g;
 }
 

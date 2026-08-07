@@ -176,21 +176,23 @@ game.cb.onHealth = (h) => ui.setHealth(h);
 game.cb.onScope = (v) => ui.setScoped(v);
 
 game.cb.onDecision = (step, pot) => {
-  const flavor = mission.decisions[step - 1] ?? ['Push forward', 'Flank around'];
+  const flavor = mission.decisions[step - 1] ??
+    [{ t: 'Push forward', sp: null }, { t: 'Flank around', sp: null }];
   ui.showDecision({
     step,
     maxSteps: GAME.maxSteps,
     pot,
     nextMult: game.round.plan.mults[step], // multiplier if the next step survives
-    optionA: flavor[0],
-    optionB: flavor[1],
+    optionA: flavor[0].t,
+    optionB: flavor[1].t,
     cashAmount: pot,
     canCash: game.round.plan.mults[step - 1] >= 1
   }, {
     onContinue: (which) => {
       sound.click();
-      ui.flashMsg(which === 'a' ? `ROGER — ${flavor[0].toUpperCase()}` : `ROGER — ${flavor[1].toUpperCase()}`);
-      game.resumeAfterDecision();
+      const chosen = which === 'a' ? flavor[0] : flavor[1];
+      ui.flashMsg(`ROGER — ${chosen.t.toUpperCase()}`);
+      game.resumeAfterDecision(chosen.sp); // the pick becomes the next fight
     },
     onCashOut: () => {
       game.cashOut(); // fires onRoundEnd

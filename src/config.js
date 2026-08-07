@@ -194,41 +194,47 @@ export const MISSION_TYPES = {
 };
 
 // Decision-point flavor: pairs of tactical options per mission type.
+// Each option carries a set-piece tag (`sp`) that is spawned into the NEXT
+// segment when chosen, so the text you pick becomes the fight you get:
+//   'car'   destructible vehicle + crew
+//   'post'  manned barricade of destructible crates
+//   'tower' sniper on a watchtower
+//   null    standard patrol sweep
 export const DECISIONS = {
   raid: [
-    ['Breach the main gate', 'Cut through the service alley'],
-    ['Smoke and push the courtyard', 'Climb the collapsed wall'],
-    ['Clear the guard post first', 'Slip past under the walkway'],
-    ['Blow the barricade', 'Take the drainage tunnel'],
-    ['Assault the barracks head-on', 'Flank along the rooftops']
+    [{ t: 'Breach the main gate', sp: 'post' }, { t: 'Cut through the service alley', sp: null }],
+    [{ t: 'Smoke and push the courtyard', sp: null }, { t: 'Climb the collapsed wall', sp: 'tower' }],
+    [{ t: 'Clear the guard post first', sp: 'post' }, { t: 'Slip past under the walkway', sp: null }],
+    [{ t: 'Blow the barricade', sp: 'post' }, { t: 'Take the drainage tunnel', sp: null }],
+    [{ t: 'Assault the barracks head-on', sp: 'post' }, { t: 'Flank along the rooftops', sp: 'tower' }]
   ],
   ambush: [
-    ['Take the high overlook', 'Set charges on the road'],
-    ['Hit the lead vehicle', 'Wait for the full column'],
-    ['Push through the kill zone', 'Circle behind the wreckage'],
-    ['Chase the runners', 'Hold and re-set the trap'],
-    ['Sweep the ditch line', 'Advance up the median']
+    [{ t: 'Take the high overlook', sp: 'tower' }, { t: 'Set charges on the road', sp: 'car' }],
+    [{ t: 'Hit the lead vehicle', sp: 'car' }, { t: 'Wait for the full column', sp: 'car' }],
+    [{ t: 'Push through the kill zone', sp: 'post' }, { t: 'Circle behind the wreckage', sp: 'car' }],
+    [{ t: 'Chase the runners', sp: 'car' }, { t: 'Hold and re-set the trap', sp: 'post' }],
+    [{ t: 'Sweep the ditch line', sp: null }, { t: 'Advance up the median', sp: 'post' }]
   ],
   rescue: [
-    ['Follow the drag marks', 'Interrogate route through the market'],
-    ['Breach the holding cell block', 'Draw guards to the depot'],
-    ['Carry the friendly through the yards', 'Secure a vehicle first'],
-    ['Run the searchlight gap', 'Cut power at the substation'],
-    ['Break for the extraction lane', 'Hole up and thin the pursuit']
+    [{ t: 'Follow the drag marks', sp: null }, { t: 'Interrogate route through the market', sp: 'post' }],
+    [{ t: 'Breach the holding cell block', sp: 'post' }, { t: 'Draw guards to the depot', sp: 'car' }],
+    [{ t: 'Carry the friendly through the yards', sp: null }, { t: 'Secure a vehicle first', sp: 'car' }],
+    [{ t: 'Run the searchlight gap', sp: 'tower' }, { t: 'Cut power at the substation', sp: 'post' }],
+    [{ t: 'Break for the extraction lane', sp: 'car' }, { t: 'Hole up and thin the pursuit', sp: 'post' }]
   ],
   elimination: [
-    ['Stalk through the compound edge', 'Move under the vantage line'],
-    ['Take the long-angle shot', 'Close in for confirmation'],
-    ['Silence the bodyguard detail', 'Bypass and isolate the target'],
-    ['Exfil through the crowd', 'Vanish over the back wall'],
-    ['Push the panic route', 'Ambush the escape car']
+    [{ t: 'Stalk through the compound edge', sp: null }, { t: 'Move under the vantage line', sp: 'tower' }],
+    [{ t: 'Take the long-angle shot', sp: 'tower' }, { t: 'Close in for confirmation', sp: 'post' }],
+    [{ t: 'Silence the bodyguard detail', sp: 'post' }, { t: 'Bypass and isolate the target', sp: null }],
+    [{ t: 'Exfil through the crowd', sp: null }, { t: 'Vanish over the back wall', sp: 'tower' }],
+    [{ t: 'Push the panic route', sp: 'car' }, { t: 'Ambush the escape car', sp: 'car' }]
   ],
   recovery: [
-    ['Sweep the crash perimeter', 'Go straight for the debris field'],
-    ['Crack the site vault', 'Strip the comms mast first'],
-    ['Carry the package low route', 'Ridge route with overwatch'],
-    ['Burn the leftover intel', 'Rig the site and move'],
-    ['Sprint the open ground', 'Leapfrog cover by pairs']
+    [{ t: 'Sweep the crash perimeter', sp: null }, { t: 'Go straight for the debris field', sp: 'post' }],
+    [{ t: 'Crack the site vault', sp: 'post' }, { t: 'Strip the comms mast first', sp: 'tower' }],
+    [{ t: 'Carry the package low route', sp: null }, { t: 'Ridge route with overwatch', sp: 'tower' }],
+    [{ t: 'Burn the leftover intel', sp: 'post' }, { t: 'Rig the site and move', sp: 'car' }],
+    [{ t: 'Sprint the open ground', sp: null }, { t: 'Leapfrog cover by pairs', sp: 'post' }]
   ]
 };
 

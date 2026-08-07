@@ -17,14 +17,16 @@ const tmpV2 = new THREE.Vector3();
 let nextBotId = 1;
 
 export class EnemyBot {
-  constructor(scene, pos, patrolTo, seg) {
+  constructor(scene, pos, patrolTo, seg, opts = {}) {
     this.id = nextBotId++;
     this.scene = scene;
     this.seg = seg;
+    this.elevated = opts.elevated ?? false; // e.g. tower snipers never move
     this.group = makeSoldier(ENEMY_CAMO);
     this.group.position.copy(pos);
     this.group.userData.enemyId = this.id;
     scene.add(this.group);
+    this.baseY = pos.y;
 
     this.home = pos.clone();
     this.patrolTo = patrolTo ? patrolTo.clone() : null;
@@ -71,7 +73,7 @@ export class EnemyBot {
       this.deathT += dt;
       const t = Math.min(1, this.deathT / 0.5);
       this.group.rotation.x = -t * Math.PI / 2;
-      this.group.position.y = -t * 0.15;
+      this.group.position.y = this.baseY - t * 0.15;
       if (this.deathT > 3) {
         this.group.visible = false;
         this.state = 'dead';
@@ -98,7 +100,34 @@ export class EnemyBot {
       return;
     }
 
-    // combat: face the player, fire wild bursts
+    // combat: fire only with a clear line of sight; hunt the player's
+    // position otherwise instead of blind-firing through walls
+    const eye = tmpV2.copy(this.group.position);
+    eye.y += 1.5;
+    const canSee = ctx.los ? ctx.los(eye, playerPos) : true;
+
+    if (!canSee) {
+      this.burstLeft = 0;
+      if (!this.elevated) {
+        // advance toward the player, axis-separated so walls stop us
+        tmpV.subVectors(playerPos, this.group.position);
+        tmpV.y = 0;
+        const d = tmpV.length();
+        if (d > 2.2) {
+          tmpV.normalize();
+          const spd = 1.7 * dt;
+          const p = this.group.position;
+          if (ctx.isWalkable?.(p.x + tmpV.x * spd + Math.sign(tmpV.x) * 0.5, p.z) ?? true) p.x += tmpV.x * spd;
+          if (ctx.isWalkable?.(p.x, p.z + tmpV.z * spd + Math.sign(tmpV.z) * 0.5) ?? true) p.z += tmpV.z * spd;
+          this.group.rotation.y = Math.atan2(tmpV.x, tmpV.z);
+          animateWalk(this.group, this.walkT, 0.8);
+          return;
+        }
+      }
+      poseIdle(this.group);
+      return;
+    }
+
     tmpV.subVectors(playerPos, this.group.position);
     this.group.rotation.y = Math.atan2(tmpV.x, tmpV.z);
     poseIdle(this.group);
@@ -114,16 +143,16 @@ export class EnemyBot {
       if (this.burstTimer <= 0) {
         this.burstTimer = 0.11;
         this.burstLeft--;
-        this.fireAt(playerPos, effects, lethal, onPlayerHit);
+        this.fireAt(playerPos, effects, lethal, onPlayerHit, ctx.clip);
       }
     }
   }
 
-  fireAt(playerPos, effects, lethal, onPlayerHit) {
+  fireAt(playerPos, effects, lethal, onPlayerHit, clip) {
     const muzzle = this.group.userData.parts.muzzle;
-    const from = muzzle.getWorldPosition(tmpV2.clone ? new THREE.Vector3() : tmpV2);
+    const from = new THREE.Vector3();
     muzzle.getWorldPosition(from);
-    const target = playerPos.clone();
+    let target = playerPos.clone();
     if (lethal) {
       // scripted bust: rounds connect
       onPlayerHit?.(0.5 + Math.random() * 0.5);
@@ -134,6 +163,7 @@ export class EnemyBot {
       target.addScaledVector(side, miss);
       target.y += (Math.random() - 0.35) * 1.2;
     }
+    if (clip) target = clip(from, target); // rounds stop at solid cover
     effects.tracer(from, target, false);
     effects.muzzleFlash(from, new THREE.Vector3().subVectors(target, from).normalize());
     sound.enemyShot();
@@ -167,12 +197,20 @@ export class Comrade {
       this.initialized = true;
     }
 
-    // pick nearest live engaged enemy
+    // pick nearest live engaged enemy WE CAN SEE — no firing through walls
     let target = null, best = Infinity;
     for (const e of enemies) {
       if (!e.alive || e.state !== 'combat') continue;
       const d = e.group.position.distanceToSquared(this.smooth);
-      if (d < best) { best = d; target = e; }
+      if (d >= best) continue;
+      if (ctx.los) {
+        tmpV2.set(this.smooth.x, 1.5, this.smooth.z);
+        tmpV.copy(e.group.position);
+        tmpV.y += 1.4;
+        if (!ctx.los(tmpV2, tmpV)) continue;
+      }
+      best = d;
+      target = e;
     }
 
     tmpV.subVectors(targetPos, this.smooth);
@@ -200,7 +238,9 @@ export class Comrade {
         const muzzle = this.group.userData.parts.muzzle;
         const from = new THREE.Vector3();
         muzzle.getWorldPosition(from);
-        const to = target.group.position.clone().setY(1.0);
+        let to = target.group.position.clone();
+        to.y += 1.1;
+        if (ctx.clip) to = ctx.clip(from, to);
         effects.tracer(from, to, true);
         sound.shot();
         // comrades only *finish* enemies after the player has had their fun

@@ -29,6 +29,12 @@ map, icon, and sound is generated procedurally at runtime.
     ends regardless of player skill.
 - At every decision point you get two tactical options (both continue the
   mission) plus **Cash Out** at the current secured amount.
+- The option you pick becomes the next fight: choices are tagged with
+  set-pieces — a destructible getaway car with its crew, a manned crate
+  barricade, or a watchtower sniper — spawned into the upcoming segment.
+- Combat is line-of-sight honest: nobody (including your own squad and your
+  bullets) shoots through walls; tracers clip at the first solid surface,
+  and unseen enemies hunt toward you instead of blind-firing.
 
 ## Themes
 

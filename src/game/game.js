@@ -12,11 +12,11 @@ import { generateMap } from './mapgen.js';
 import { buildWorld } from './world.js';
 import { Effects, sound } from './effects.js';
 import { EnemyBot, Comrade } from './bots.js';
-import { makeVehicle } from './models.js';
+import { makeVehicle, makeCar } from './models.js';
 import { Controls, IS_TOUCH } from './controls.js';
 import { makeRng } from '../rng.js';
 
-const EYE = 1.62;
+const EYE = 1.55; // matches the (scaled) soldier models' eye line
 const PLAYER_RADIUS = 0.45;
 const WALK_SPEED = 4.6;
 const FIRE_INTERVAL = 1 / 7.5;
@@ -54,6 +54,7 @@ export class Game {
     this.enemies = [];
     this.comrades = [];
     this.grenades = [];
+    this.destructibles = []; // set-piece cars / barricades
     this.vehicle = null;
 
     this.cb = {}; // callbacks wired by main.js
@@ -96,6 +97,7 @@ export class Game {
     this.map = generateMap(rng);
     const S = this.map.cellSize;
     this.routePts = this.map.route.map((c) => new THREE.Vector3(c.x * S, 0, c.z * S));
+    this.pillarSet = new Set((this.map.pillars ?? []).map((p) => `${p.x},${p.z}`));
     this.world = buildWorld(this.scene, this.map, mission.location.env, rng);
     this.spawnEnemies(rng);
     this.mode = 'lobby';
@@ -141,6 +143,8 @@ export class Game {
     this.comrades = [];
     for (const g of this.grenades) this.scene.remove(g.mesh);
     this.grenades = [];
+    for (const d of this.destructibles) this.scene.remove(d.group);
+    this.destructibles = [];
     if (this.vehicle) { this.scene.remove(this.vehicle); this.vehicle = null; }
     if (this.viewmodel) { this.camera.remove(this.viewmodel); }
     this.effects.clear();
@@ -348,9 +352,163 @@ export class Game {
     return new THREE.Vector3(room.x * S, 0, room.z * S);
   }
 
-  // called by UI after a decision choice
-  resumeAfterDecision() {
+  // ------------------------------------------------------ line of sight
+  //
+  // Fast grid march (Amanatides & Woo) through the map cells. A shot is
+  // blocked when it crosses an uncarved cell BELOW that cell's blocking
+  // height — full walls block standing shots, courtyard cover only blocks
+  // crouch-height shots, and anything flying high (tower snipers) clears.
+
+  gridCast(from, to) {
+    const S = this.map.cellSize;
+    const fx = from.x / S + 0.5, fz = from.z / S + 0.5;
+    const tx = to.x / S + 0.5, tz = to.z / S + 0.5;
+    const dx = tx - fx, dz = tz - fz;
+    let cx = Math.floor(fx), cz = Math.floor(fz);
+    const stepX = dx > 0 ? 1 : -1, stepZ = dz > 0 ? 1 : -1;
+    const tDeltaX = dx !== 0 ? Math.abs(1 / dx) : Infinity;
+    const tDeltaZ = dz !== 0 ? Math.abs(1 / dz) : Infinity;
+    let tMaxX = dx !== 0 ? (stepX > 0 ? cx + 1 - fx : fx - cx) * tDeltaX : Infinity;
+    let tMaxZ = dz !== 0 ? (stepZ > 0 ? cz + 1 - fz : fz - cz) * tDeltaZ : Infinity;
+    let t = 0;
+    for (let i = 0; i < 160; i++) {
+      if (tMaxX < tMaxZ) { cx += stepX; t = tMaxX; tMaxX += tDeltaX; }
+      else { cz += stepZ; t = tMaxZ; tMaxZ += tDeltaZ; }
+      if (t > 1) return null;
+      if (!this.map.isCarved(cx, cz)) {
+        const cutoff = this.pillarSet.has(`${cx},${cz}`) ? 1.45 : 3.45;
+        const h = from.y + (to.y - from.y) * t;
+        if (h < cutoff) {
+          return { t, point: new THREE.Vector3().lerpVectors(from, to, t) };
+        }
+      }
+    }
+    return null;
+  }
+
+  losClear(from, to) { return this.gridCast(from, to) === null; }
+  clipPoint(from, to) { return this.gridCast(from, to)?.point ?? to; }
+
+  botCtxExtras() {
+    return {
+      los: (a, b) => this.losClear(a, b),
+      clip: (a, b) => this.clipPoint(a, b),
+      isWalkable: (x, z) => {
+        const c = this.map.cellAt(x, z);
+        return this.map.isCarved(c.x, c.z);
+      }
+    };
+  }
+
+  // ------------------------------------------------------- set-pieces
+
+  // Spawn the chosen decision option's fight into the upcoming segment.
+  spawnSetpiece(seg, sp) {
+    if (!sp || !this.map) return;
+    const S = this.map.cellSize;
+    const cells = this.map.path.filter((p) =>
+      p.seg === seg &&
+      !this.map.rooms.some((r) => Math.abs(r.x - p.x) <= 1 && Math.abs(r.z - p.z) <= 1));
+    if (cells.length < 3) return;
+    const idx = Math.min(cells.length - 2, Math.floor(cells.length * 0.6));
+    const cell = cells[idx];
+    const nxt = cells[idx + 1] ?? cell;
+    const yaw = Math.atan2(nxt.x - cell.x, nxt.z - cell.z);
+    const fwd = new THREE.Vector3(Math.sin(yaw), 0, Math.cos(yaw));
+    const lat = new THREE.Vector3(Math.cos(yaw), 0, -Math.sin(yaw));
+    const pos = new THREE.Vector3(cell.x * S, 0, cell.z * S);
+    const pick = (arr) => arr[Math.floor(Math.random() * arr.length)];
+
+    if (sp === 'car') {
+      const car = makeCar({ pick });
+      car.position.copy(pos);
+      car.rotation.y = yaw + pick([0.35, -0.35, 0.9]);
+      this.scene.add(car);
+      const dCar = { kind: 'car', group: car, hp: 7, alive: true, pos: pos.clone() };
+      car.userData.destructibleRef = dCar;
+      this.destructibles.push(dCar);
+      for (const [f, l] of [[1.6, 1.7], [-1.8, -1.5]]) {
+        const p = pos.clone().addScaledVector(fwd, f).addScaledVector(lat, l);
+        this.enemies.push(new EnemyBot(this.scene, p, null, seg));
+      }
+    } else if (sp === 'post') {
+      const grp = new THREE.Group();
+      const mat = new THREE.MeshLambertMaterial({ color: 0x6e5c3a });
+      for (const k of [-1, 0, 1]) {
+        const crate = new THREE.Mesh(new THREE.BoxGeometry(1.6, 1.1, 0.9), mat);
+        crate.position.copy(pos).addScaledVector(lat, k * 1.7);
+        crate.position.y = 0.55;
+        crate.rotation.y = yaw + k * 0.1;
+        grp.add(crate);
+      }
+      this.scene.add(grp);
+      const dPost = { kind: 'post', group: grp, hp: 6, alive: true, pos: pos.clone() };
+      grp.userData.destructibleRef = dPost;
+      this.destructibles.push(dPost);
+      for (const l of [-1.2, 1.2]) {
+        const p = pos.clone().addScaledVector(fwd, 2.3).addScaledVector(lat, l);
+        this.enemies.push(new EnemyBot(this.scene, p, null, seg));
+      }
+    } else if (sp === 'tower') {
+      // find a solid cell beside the lane for the tower footing
+      let footing = null;
+      for (const [dx, dz] of [[2, 0], [-2, 0], [0, 2], [0, -2], [2, 2], [-2, -2]]) {
+        const x = cell.x + dx, z = cell.z + dz;
+        if (!this.map.isCarved(x, z) && !this.pillarSet.has(`${x},${z}`)) { footing = { x, z }; break; }
+      }
+      if (!footing) return;
+      const g = new THREE.Group();
+      const legMat = new THREE.MeshLambertMaterial({ color: 0x4a4438 });
+      for (const [lx, lz] of [[-0.9, -0.9], [0.9, -0.9], [-0.9, 0.9], [0.9, 0.9]]) {
+        const leg = new THREE.Mesh(new THREE.BoxGeometry(0.22, 5.2, 0.22), legMat);
+        leg.position.set(lx, 2.6, lz);
+        g.add(leg);
+      }
+      const deck = new THREE.Mesh(new THREE.BoxGeometry(2.6, 0.25, 2.6), legMat);
+      deck.position.y = 4.85;
+      const rail = new THREE.Mesh(new THREE.BoxGeometry(2.6, 0.6, 0.08), legMat);
+      rail.position.set(0, 5.3, 1.26);
+      g.add(deck, rail);
+      g.position.set(footing.x * S, 0, footing.z * S);
+      this.scene.add(g);
+      const sniper = new EnemyBot(
+        this.scene,
+        new THREE.Vector3(footing.x * S, 4.98, footing.z * S),
+        null, seg, { elevated: true }
+      );
+      this.enemies.push(sniper);
+    }
+  }
+
+  destroyDestructible(d, by = 'player') {
+    if (!d.alive) return;
+    d.alive = false;
+    const blast = d.pos.clone().setY(0.8);
+    this.effects.explosion(blast);
+    sound.explosion();
+    this.shake = Math.min(this.shake + 0.6, 1);
+    if (d.kind === 'car') {
+      d.group.userData.wreck?.();
+      // the blast takes out the crew standing around it
+      for (const e of this.enemies) {
+        if (e.alive && e.group.position.distanceTo(blast) < 6.5 &&
+            this.losClear(blast, e.group.position.clone().setY(1.2))) {
+          e.takeHit(this.effects);
+          e.takeHit(this.effects);
+          if (!e.alive) this.registerKill(e, by);
+        }
+      }
+    } else {
+      // barricade breaks apart
+      d.group.traverse((o) => { if (o.isMesh) { o.scale.y = 0.3; o.position.y = 0.16; } });
+    }
+  }
+
+  // called by UI after a decision choice; `sp` is the chosen option's
+  // set-piece, staged into the next segment before the squad moves out
+  resumeAfterDecision(sp = null) {
     if (this.mode !== 'decision') return;
+    this.spawnSetpiece(this.round.step + 1, sp);
     this.mode = 'play';
     this.controls.enable();
     if (!IS_TOUCH) this.controls.requestPointerLock();
@@ -399,23 +557,31 @@ export class Game {
     this.shake = Math.min(this.shake + 0.12, 0.5);
     if (this.viewmodel) this.viewmodel.position.z = -0.4; // kick, eased back in update
 
-    // raycast from camera center
+    // raycast from camera center; the round stops at the FIRST thing it
+    // meets — wall, destructible, or enemy
     const ray = new THREE.Raycaster();
     ray.setFromCamera({ x: 0, y: 0 }, this.camera);
     ray.far = 90;
-    const targets = this.enemies.filter((e) => e.alive).map((e) => e.group);
-    const hits = ray.intersectObjects(targets, true);
 
-    const muzzle = new THREE.Vector3();
-    this.camera.getWorldPosition(muzzle);
+    const camPos = new THREE.Vector3();
+    this.camera.getWorldPosition(camPos);
     const dir = new THREE.Vector3();
     this.camera.getWorldDirection(dir);
-    muzzle.addScaledVector(dir, 0.6).add(tmpV.set(dir.z, -0.12, -dir.x).multiplyScalar(0.18));
+
+    const enemyHits = ray.intersectObjects(this.enemies.filter((e) => e.alive).map((e) => e.group), true);
+    const destrHits = ray.intersectObjects(this.destructibles.filter((d) => d.alive).map((d) => d.group), true);
+    const wallHit = this.gridCast(camPos, camPos.clone().addScaledVector(dir, 90));
+    const wallDist = wallHit ? wallHit.t * 90 : Infinity;
+    const enemyDist = enemyHits.length > 0 ? enemyHits[0].distance : Infinity;
+    const destrDist = destrHits.length > 0 ? destrHits[0].distance : Infinity;
+
+    const muzzle = camPos.clone().addScaledVector(dir, 0.6)
+      .add(tmpV.set(dir.z, -0.12, -dir.x).multiplyScalar(0.18));
 
     let end;
-    if (hits.length > 0) {
-      end = hits[0].point;
-      const bot = hits[0].object.userData.soldierRoot?.userData.enemyId;
+    if (enemyDist < wallDist && enemyDist <= destrDist) {
+      end = enemyHits[0].point;
+      const bot = enemyHits[0].object.userData.soldierRoot?.userData.enemyId;
       const enemy = this.enemies.find((e) => e.id === bot);
       if (enemy) {
         enemy.engage();
@@ -423,6 +589,19 @@ export class Game {
         sound.hit();
         if (died) this.registerKill(enemy, 'player');
       }
+    } else if (destrDist < wallDist) {
+      end = destrHits[0].point;
+      let node = destrHits[0].object;
+      while (node && !node.userData.destructibleRef) node = node.parent;
+      const d = node?.userData.destructibleRef;
+      this.effects.hitSpark(end);
+      if (d && d.alive) {
+        d.hp -= 1;
+        if (d.hp <= 0) this.destroyDestructible(d, 'player');
+      }
+    } else if (wallHit) {
+      end = wallHit.point;
+      this.effects.hitSpark(end);
     } else {
       end = muzzle.clone().addScaledVector(dir, 90);
     }
@@ -467,11 +646,19 @@ export class Game {
         this.effects.explosion(g.mesh.position);
         sound.explosion();
         this.shake = 0.7;
+        const blast = g.mesh.position.clone().setY(0.6);
         for (const e of this.enemies) {
-          if (e.alive && e.group.position.distanceTo(g.mesh.position) < 5.5) {
+          if (e.alive && e.group.position.distanceTo(g.mesh.position) < 5.5 &&
+              this.losClear(blast, e.group.position.clone().setY(1.2))) {
             e.takeHit(this.effects);
             const died = e.takeHit(this.effects);
             if (died || !e.alive) this.registerKill(e, 'player');
+          }
+        }
+        for (const d of this.destructibles) {
+          if (d.alive && d.pos.distanceTo(g.mesh.position) < 5 &&
+              this.losClear(blast, d.pos.clone().setY(0.8))) {
+            this.destroyDestructible(d, 'player');
           }
         }
         this.scene.remove(g.mesh);
@@ -614,9 +801,10 @@ export class Game {
       this.cb.onHealth?.(this.player.health);
     }
 
-    // bust-step pressure: if the player camps or is about to slip through,
-    // keep the scripted hits coming
-    if (r.lethal && r.segTime > 3 && Math.random() < dt * 0.8) {
+    // bust-step pressure: enemies hunting the player will usually earn
+    // line-of-sight quickly; this fallback covers a player who camps out
+    // of sight so the scripted bust can never stall forever
+    if (r.lethal && r.segTime > 7 && Math.random() < dt * 0.8) {
       this.applyPlayerHit(0.6);
     }
 
@@ -712,7 +900,8 @@ export class Game {
       playerPos: this.player.pos,
       effects: this.effects,
       lethal: false,
-      onPlayerHit: (s) => this.applyPlayerHit(s)
+      onPlayerHit: (s) => this.applyPlayerHit(s),
+      ...this.botCtxExtras()
     };
 
     switch (this.mode) {
@@ -793,7 +982,8 @@ export class Game {
         enemies: combat ? this.enemies.filter((e) => e.seg === r.step || e.state === 'combat') : [],
         effects: this.effects,
         graceElapsed: combat && r.segTime > 4.5,
-        onComradeKill: (e) => this.registerKill(e, 'comrade')
+        onComradeKill: (e) => this.registerKill(e, 'comrade'),
+        ...this.botCtxExtras()
       });
     }
   }
