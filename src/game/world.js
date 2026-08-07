@@ -49,7 +49,8 @@ export function buildWorld(scene, map, env, rng) {
   const wallH = 3.1;
   const wallGeo = new THREE.BoxGeometry(S, wallH, 0.7);
   const wallMat = lambert(env.wall);
-  const edges = collectWallEdges(map);
+  const pillarSet = new Set((map.pillars ?? []).map((p) => `${p.x},${p.z}`));
+  const edges = collectWallEdges(map, pillarSet);
   const walls = new THREE.InstancedMesh(wallGeo, wallMat, edges.length);
   edges.forEach((e, i) => {
     dummy.position.set(e.x, wallH / 2, e.z);
@@ -62,25 +63,47 @@ export function buildWorld(scene, map, env, rng) {
   });
   group.add(walls);
 
-  // ---- buildings / skyline beyond the walls
+  // ---- courtyard pillars: low cover blocks instead of full walls
+  if (pillarSet.size > 0) {
+    const coverGeo = new THREE.BoxGeometry(S * 0.62, 1.35, S * 0.62);
+    const coverMat = lambert(env.wallAlt);
+    for (const p of map.pillars) {
+      const c = new THREE.Mesh(coverGeo, coverMat);
+      c.position.set(p.x * S, 0.68, p.z * S);
+      group.add(c);
+    }
+  }
+
+  // ---- fortress perimeter: outer wall ring, corner towers, entry gate
+  buildPerimeter(group, map, env);
+
+  // ---- watchtowers overlooking the route
+  buildWatchtowers(group, map, env, rng);
+
+  // ---- buildings / skyline beyond the walls, clustered into blocks
   const buildingMat = lambert(env.building);
   const buildingMatAlt = lambert(env.wallAlt);
-  const buildingCells = pickBuildingCells(map, rng, 90);
-  for (const b of buildingCells) {
-    const h = rng.range(3.2, env.night ? 9 : 7);
-    const w = rng.range(0.7, 1.0) * S;
-    const d = rng.range(0.7, 1.0) * S;
-    const m = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), rng.chance(0.5) ? buildingMat : buildingMatAlt);
-    m.position.set(b.x * S + rng.range(-1, 1), h / 2, b.z * S + rng.range(-1, 1));
-    m.rotation.y = rng.range(-0.08, 0.08);
-    group.add(m);
-    if (env.night && rng.chance(0.5)) {
-      const win = new THREE.Mesh(
-        new THREE.PlaneGeometry(0.7, 0.9),
-        new THREE.MeshBasicMaterial({ color: 0xffd98a })
-      );
-      win.position.set(m.position.x, rng.range(1.5, h - 1), m.position.z + d / 2 + 0.02);
-      group.add(win);
+  const anchors = pickBuildingCells(map, rng, 60);
+  for (const b of anchors) {
+    const cluster = rng.int(1, 3);
+    for (let ci = 0; ci < cluster; ci++) {
+      const h = rng.range(3.0, env.night ? 9 : 7) * (ci === 0 ? 1 : 0.7);
+      const w = rng.range(0.6, 1.1) * S;
+      const d = rng.range(0.6, 1.1) * S;
+      const ox = ci === 0 ? 0 : rng.pick([-1, 1]) * S * rng.range(0.6, 0.95);
+      const oz = ci === 0 ? 0 : rng.pick([-1, 1]) * S * rng.range(0.6, 0.95);
+      const m = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), rng.chance(0.5) ? buildingMat : buildingMatAlt);
+      m.position.set(b.x * S + ox + rng.range(-1, 1), h / 2, b.z * S + oz + rng.range(-1, 1));
+      m.rotation.y = rng.range(-0.06, 0.06);
+      group.add(m);
+      if (env.night && rng.chance(0.4)) {
+        const win = new THREE.Mesh(
+          new THREE.PlaneGeometry(0.7, 0.9),
+          new THREE.MeshBasicMaterial({ color: 0xffd98a })
+        );
+        win.position.set(m.position.x, rng.range(1.5, Math.max(1.6, h - 1)), m.position.z + d / 2 + 0.02);
+        group.add(win);
+      }
     }
   }
 
@@ -117,17 +140,116 @@ export function buildWorld(scene, map, env, rng) {
   return group;
 }
 
-function collectWallEdges(map) {
+function collectWallEdges(map, pillarSet = new Set()) {
   const S = map.cellSize;
   const edges = [];
+  const solid = (x, z) => !map.isCarved(x, z) && !pillarSet.has(`${x},${z}`);
   for (const c of map.carved) {
     const [x, z] = c.split(',').map(Number);
-    if (!map.isCarved(x, z + 1)) edges.push({ x: x * S, z: z * S + S / 2, rotY: 0 });
-    if (!map.isCarved(x, z - 1)) edges.push({ x: x * S, z: z * S - S / 2, rotY: 0 });
-    if (!map.isCarved(x + 1, z)) edges.push({ x: x * S + S / 2, z: z * S, rotY: Math.PI / 2 });
-    if (!map.isCarved(x - 1, z)) edges.push({ x: x * S - S / 2, z: z * S, rotY: Math.PI / 2 });
+    if (solid(x, z + 1)) edges.push({ x: x * S, z: z * S + S / 2, rotY: 0 });
+    if (solid(x, z - 1)) edges.push({ x: x * S, z: z * S - S / 2, rotY: 0 });
+    if (solid(x + 1, z)) edges.push({ x: x * S + S / 2, z: z * S, rotY: Math.PI / 2 });
+    if (solid(x - 1, z)) edges.push({ x: x * S - S / 2, z: z * S, rotY: Math.PI / 2 });
   }
   return edges;
+}
+
+// Outer fortress wall with corner towers and a gate on the side the squad
+// drives in from (the insertion vehicle approaches behind the start cell).
+function buildPerimeter(group, map, env) {
+  const S = map.cellSize;
+  const M = 4; // margin in cells
+  const x0 = (map.bounds.minX - M) * S, x1 = (map.bounds.maxX + M) * S;
+  const z0 = (map.bounds.minZ - M) * S, z1 = (map.bounds.maxZ + M) * S;
+  const h = 4.8, t = 1.4;
+  const mat = lambert(env.wallAlt);
+
+  // approach direction = behind the first path step
+  const a = map.path[0], b2 = map.path[1] ?? a;
+  const dir = { x: Math.sign(b2.x - a.x), z: Math.sign(b2.z - a.z) };
+  const gate = { x: a.x * S, z: a.z * S };
+  const gap = S * 1.6;
+
+  const seg = (cx, cz, len, horizontal) => {
+    if (len <= 0.01) return;
+    const m = new THREE.Mesh(new THREE.BoxGeometry(horizontal ? len : t, h, horizontal ? t : len), mat);
+    m.position.set(cx, h / 2, cz);
+    group.add(m);
+  };
+
+  // each side; the side facing the approach gets a gate gap
+  const sides = [
+    { horizontal: true, fixed: z0, gateHere: dir.z > 0, gateAt: gate.x, from: x0, to: x1 },
+    { horizontal: true, fixed: z1, gateHere: dir.z < 0, gateAt: gate.x, from: x0, to: x1 },
+    { horizontal: false, fixed: x0, gateHere: dir.x > 0, gateAt: gate.z, from: z0, to: z1 },
+    { horizontal: false, fixed: x1, gateHere: dir.x < 0, gateAt: gate.z, from: z0, to: z1 }
+  ];
+  for (const s of sides) {
+    const place = (from, to) => {
+      const len = to - from;
+      const mid = (from + to) / 2;
+      if (s.horizontal) seg(mid, s.fixed, len, true);
+      else seg(s.fixed, mid, len, false);
+    };
+    if (s.gateHere) {
+      place(s.from, s.gateAt - gap);
+      place(s.gateAt + gap, s.to);
+      // gate pillars
+      for (const off of [-gap, gap]) {
+        const p = new THREE.Mesh(new THREE.BoxGeometry(1.6, h + 1.2, 1.6), mat);
+        if (s.horizontal) p.position.set(s.gateAt + off, (h + 1.2) / 2, s.fixed);
+        else p.position.set(s.fixed, (h + 1.2) / 2, s.gateAt + off);
+        group.add(p);
+      }
+    } else {
+      place(s.from, s.to);
+    }
+  }
+
+  // corner towers
+  for (const [cx, cz] of [[x0, z0], [x1, z0], [x0, z1], [x1, z1]]) {
+    const tower = new THREE.Mesh(new THREE.BoxGeometry(3.4, 7.2, 3.4), mat);
+    tower.position.set(cx, 3.6, cz);
+    const cap = new THREE.Mesh(new THREE.BoxGeometry(4.2, 0.9, 4.2), lambert(env.wall));
+    cap.position.set(cx, 7.4, cz);
+    group.add(tower, cap);
+  }
+}
+
+function buildWatchtowers(group, map, env, rng) {
+  const S = map.cellSize;
+  const count = rng.int(3, 5);
+  const legMat = lambert(0x4a4438);
+  const cabMat = lambert(env.wallAlt);
+  let placed = 0;
+  for (let i = 0; i < count * 6 && placed < count; i++) {
+    const p = rng.pick(map.path);
+    const dx = rng.pick([-2, -3, 2, 3]), dz = rng.pick([-2, -3, 2, 3]);
+    const x = p.x + dx, z = p.z + dz;
+    if (map.isCarved(x, z)) continue;
+    let touching = false;
+    for (let ax = -1; ax <= 1 && !touching; ax++) {
+      for (let az = -1; az <= 1; az++) {
+        if (map.isCarved(x + ax, z + az)) { touching = true; break; }
+      }
+    }
+    if (touching) continue; // keep legs clear of the lanes
+    const g = new THREE.Group();
+    for (const [lx, lz] of [[-0.9, -0.9], [0.9, -0.9], [-0.9, 0.9], [0.9, 0.9]]) {
+      const leg = new THREE.Mesh(new THREE.BoxGeometry(0.22, 5.2, 0.22), legMat);
+      leg.position.set(lx, 2.6, lz);
+      g.add(leg);
+    }
+    const cab = new THREE.Mesh(new THREE.BoxGeometry(2.6, 1.5, 2.6), cabMat);
+    cab.position.y = 5.6;
+    const roof = new THREE.Mesh(new THREE.BoxGeometry(3.1, 0.3, 3.1), legMat);
+    roof.position.y = 6.6;
+    g.add(cab, roof);
+    g.position.set(x * S, 0, z * S);
+    g.rotation.y = rng.range(0, Math.PI * 2);
+    group.add(g);
+    placed++;
+  }
 }
 
 function pickBuildingCells(map, rng, count) {

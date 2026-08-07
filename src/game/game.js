@@ -217,7 +217,21 @@ export class Game {
     this.vehicle = makeVehicle(type);
     this.scene.add(this.vehicle);
     this.preludeKind = type === 'parachute' ? 'drop' : 'drive';
-    this.preludeDur = this.preludeKind === 'drop' ? 5.2 : 4.6;
+
+    // drive in from beyond the fortress perimeter so the vehicle passes
+    // through the gate instead of spawning against the outer wall
+    const S = this.map.cellSize;
+    const b = this.map.bounds;
+    const yaw = this.controls.yaw;
+    const fwd = { x: -Math.sin(yaw), z: -Math.cos(yaw) };
+    const p = this.player.pos;
+    let dWall = 42;
+    if (fwd.z > 0.5) dWall = p.z - (b.minZ - 4) * S;
+    else if (fwd.z < -0.5) dWall = (b.maxZ + 4) * S - p.z;
+    else if (fwd.x > 0.5) dWall = p.x - (b.minX - 4) * S;
+    else if (fwd.x < -0.5) dWall = (b.maxX + 4) * S - p.x;
+    this.driveDist = Math.max(36, dWall + S * 2.5);
+    this.preludeDur = this.preludeKind === 'drop' ? 5.2 : 3.4 + this.driveDist / 26;
     sound.step();
   }
 
@@ -240,7 +254,7 @@ export class Game {
       this.vehicle.rotation.y = yaw;
       this.vehicle.visible = t < 0.97;
     } else {
-      const dist = (1 - ease) * 42;
+      const dist = (1 - ease) * (this.driveDist ?? 42);
       const vpos = tmpV.copy(start).addScaledVector(fwd, -dist - 1.5);
       const bob = Math.sin(this.preludeT * 9) * 0.05 * (1 - t) + Math.sin(this.preludeT * 2.2) * 0.08;
       this.vehicle.position.set(vpos.x, 0, vpos.z);

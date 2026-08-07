@@ -44,6 +44,8 @@ html, body {
   z-index: 20;
   touch-action: none;
 }
+/* on desktop the touch layer must not intercept mouse events for the canvas */
+body:not(.touch-mode) #touch-layer { display: none; }
 
 .joystick {
   position: fixed;
@@ -428,11 +430,9 @@ body.touch-mode.playing .combat-btn { display: flex; }
   padding: 6px 9px;
   border-radius: 7px;
   background: rgba(255, 255, 255, 0.04);
-  animation: joinIn 0.35s ease;
 }
-@keyframes joinIn { from { opacity: 0; transform: translateX(-8px); } }
 #lobby-roster .seat-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--accent); }
-#lobby-roster .seat-dot.empty { background: rgba(255, 255, 255, 0.15); animation: pulse 1.2s infinite; }
+#lobby-roster .seat-dot.empty { background: rgba(255, 255, 255, 0.15); }
 #lobby-roster .r-rank { color: var(--dim); font-size: 10px; }
 #lobby-roster .r-you { margin-left: auto; color: var(--accent); font-size: 9.5px; letter-spacing: 0.15em; }
 #lobby-roster .r-status { margin-left: auto; color: var(--dim); font-size: 9.5px; letter-spacing: 0.1em; }

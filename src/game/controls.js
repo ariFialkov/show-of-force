@@ -66,7 +66,10 @@ export class Controls {
 
   requestPointerLock() {
     if (!IS_TOUCH && document.pointerLockElement !== this.canvas) {
-      this.canvas.requestPointerLock?.();
+      try {
+        const p = this.canvas.requestPointerLock?.();
+        p?.catch?.(() => {});
+      } catch { /* pointer lock unsupported/denied */ }
     }
   }
 

@@ -18,6 +18,9 @@ const game = new Game(document.getElementById('gl'), {
   btnFrag: ui.els.btnFrag
 });
 
+// debugging hook (harmless in production; used by automated smoke tests)
+window.__game = game;
+
 // unlock audio on first interaction
 game.controls.onFirstInteract = () => sound.ensure();
 document.addEventListener('pointerdown', () => sound.ensure(), { once: true });
@@ -51,11 +54,16 @@ function rotateLobby() {
   ui.renderLobbyMission(mission);
   rotationStart = performance.now();
 
-  // staggered fake joins
+  // staggered fake joins — only re-render when the joined count changes,
+  // so rows don't re-animate/flash on every tick
+  let lastJoined = -1;
   const renderRoster = () => {
     const t = performance.now() - rotationStart;
     const joined = mission.roster.filter((b) => t >= b.joinDelay).length;
-    ui.renderRoster(mission, joined, false);
+    if (joined !== lastJoined) {
+      lastJoined = joined;
+      ui.renderRoster(mission, joined, false);
+    }
   };
   renderRoster();
   rosterTimer = setInterval(renderRoster, 400);
