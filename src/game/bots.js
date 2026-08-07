@@ -1,0 +1,230 @@
+// Enemy and comrade bot behavior.
+//
+// Enemies are theater: they patrol, shoot NEAR the player (never hitting
+// unless the round script says the player busts here), and get finished off
+// by comrades if the player ignores them. Comrades follow the player and
+// guarantee every active enemy dies eventually.
+
+import * as THREE from 'three';
+import { makeSoldier, animateWalk, poseIdle } from './models.js';
+import { sound } from './effects.js';
+
+const ENEMY_CAMO = { cloth: 0x6b3f33, vest: 0x4a2a22, helmet: 0x3c2620, skin: 0xb98d5e };
+const UP = new THREE.Vector3(0, 1, 0);
+const tmpV = new THREE.Vector3();
+const tmpV2 = new THREE.Vector3();
+
+let nextBotId = 1;
+
+export class EnemyBot {
+  constructor(scene, pos, patrolTo, seg) {
+    this.id = nextBotId++;
+    this.scene = scene;
+    this.seg = seg;
+    this.group = makeSoldier(ENEMY_CAMO);
+    this.group.position.copy(pos);
+    this.group.userData.enemyId = this.id;
+    scene.add(this.group);
+
+    this.home = pos.clone();
+    this.patrolTo = patrolTo ? patrolTo.clone() : null;
+    this.patrolT = Math.random();
+    this.patrolDir = 1;
+
+    this.hp = 2;
+    this.state = 'patrol'; // patrol | combat | dying | dead
+    this.fireTimer = 1 + Math.random() * 1.6;
+    this.burstLeft = 0;
+    this.burstTimer = 0;
+    this.deathT = 0;
+    this.walkT = Math.random() * 10;
+  }
+
+  get alive() { return this.state === 'patrol' || this.state === 'combat'; }
+
+  engage() {
+    if (this.state === 'patrol') {
+      this.state = 'combat';
+      this.fireTimer = 0.4 + Math.random() * 1.2;
+    }
+  }
+
+  takeHit(effects) {
+    if (!this.alive) return false;
+    this.hp -= 1;
+    effects.hitSpark(tmpV.copy(this.group.position).setY(1.0).add(
+      tmpV2.set((Math.random() - 0.5) * 0.4, Math.random() * 0.4, (Math.random() - 0.5) * 0.4)
+    ));
+    if (this.hp <= 0) {
+      this.state = 'dying';
+      this.deathT = 0;
+      return true;
+    }
+    return false;
+  }
+
+  update(dt, ctx) {
+    const { playerPos, effects, lethal, onPlayerHit } = ctx;
+    this.walkT += dt;
+
+    if (this.state === 'dying') {
+      this.deathT += dt;
+      const t = Math.min(1, this.deathT / 0.5);
+      this.group.rotation.x = -t * Math.PI / 2;
+      this.group.position.y = -t * 0.15;
+      if (this.deathT > 3) {
+        this.group.visible = false;
+        this.state = 'dead';
+      }
+      return;
+    }
+    if (this.state === 'dead') return;
+
+    if (this.state === 'patrol') {
+      if (this.patrolTo) {
+        this.patrolT += dt * 0.14 * this.patrolDir;
+        if (this.patrolT > 1) { this.patrolT = 1; this.patrolDir = -1; }
+        if (this.patrolT < 0) { this.patrolT = 0; this.patrolDir = 1; }
+        this.group.position.lerpVectors(this.home, this.patrolTo, this.patrolT);
+        tmpV.subVectors(this.patrolDir > 0 ? this.patrolTo : this.home, this.group.position);
+        if (tmpV.lengthSq() > 0.001) {
+          this.group.rotation.y = Math.atan2(tmpV.x, tmpV.z);
+        }
+        animateWalk(this.group, this.walkT, 0.6);
+      } else {
+        poseIdle(this.group);
+        this.group.rotation.y += Math.sin(this.walkT * 0.4) * dt * 0.3;
+      }
+      return;
+    }
+
+    // combat: face the player, fire wild bursts
+    tmpV.subVectors(playerPos, this.group.position);
+    this.group.rotation.y = Math.atan2(tmpV.x, tmpV.z);
+    poseIdle(this.group);
+
+    this.fireTimer -= dt;
+    if (this.fireTimer <= 0 && this.burstLeft <= 0) {
+      this.burstLeft = 3 + Math.floor(Math.random() * 3);
+      this.burstTimer = 0;
+      this.fireTimer = 1.4 + Math.random() * 1.8;
+    }
+    if (this.burstLeft > 0) {
+      this.burstTimer -= dt;
+      if (this.burstTimer <= 0) {
+        this.burstTimer = 0.11;
+        this.burstLeft--;
+        this.fireAt(playerPos, effects, lethal, onPlayerHit);
+      }
+    }
+  }
+
+  fireAt(playerPos, effects, lethal, onPlayerHit) {
+    const muzzle = this.group.userData.parts.muzzle;
+    const from = muzzle.getWorldPosition(tmpV2.clone ? new THREE.Vector3() : tmpV2);
+    muzzle.getWorldPosition(from);
+    const target = playerPos.clone();
+    if (lethal) {
+      // scripted bust: rounds connect
+      onPlayerHit?.(0.5 + Math.random() * 0.5);
+    } else {
+      // near-miss: offset the impact point so tracers whiz past the camera
+      const side = new THREE.Vector3().subVectors(target, from).cross(UP).normalize();
+      const miss = (Math.random() < 0.5 ? 1 : -1) * (0.7 + Math.random() * 1.3);
+      target.addScaledVector(side, miss);
+      target.y += (Math.random() - 0.35) * 1.2;
+    }
+    effects.tracer(from, target, false);
+    effects.muzzleFlash(from, new THREE.Vector3().subVectors(target, from).normalize());
+    sound.enemyShot();
+  }
+
+  dispose() {
+    this.scene.remove(this.group);
+  }
+}
+
+export class Comrade {
+  constructor(scene, camo, roster) {
+    this.scene = scene;
+    this.group = makeSoldier(camo);
+    scene.add(this.group);
+    this.callsign = roster?.callsign ?? 'Bravo';
+    this.walkT = Math.random() * 10;
+    this.killTimer = 0;
+    this.smooth = new THREE.Vector3();
+    this.initialized = false;
+  }
+
+  // slotOffset: local offset behind the player (x = lateral, z = back)
+  update(dt, ctx) {
+    const { playerPos, playerYaw, slot, enemies, effects, graceElapsed, onComradeKill } = ctx;
+
+    // target formation position behind the player
+    // forward = (-sinY, -cosY), right = (cosY, -sinY); slot.z < 0 means behind
+    const sinY = Math.sin(playerYaw), cosY = Math.cos(playerYaw);
+    const lx = slot.x, lz = slot.z;
+    tmpV.set(
+      playerPos.x + (cosY * lx - sinY * lz),
+      0,
+      playerPos.z + (-sinY * lx - cosY * lz)
+    );
+    if (!this.initialized) {
+      this.smooth.copy(tmpV);
+      this.initialized = true;
+    }
+    const dist = this.smooth.distanceTo(tmpV);
+    const speed = THREE.MathUtils.clamp(dist * 2.2, 0, 7);
+    this.smooth.lerp(tmpV, Math.min(1, dt * 2.5));
+    this.group.position.copy(this.smooth);
+
+    // pick nearest live engaged enemy
+    let target = null, best = Infinity;
+    for (const e of enemies) {
+      if (!e.alive || e.state !== 'combat') continue;
+      const d = e.group.position.distanceToSquared(this.smooth);
+      if (d < best) { best = d; target = e; }
+    }
+
+    if (target) {
+      tmpV2.subVectors(target.group.position, this.group.position);
+      this.group.rotation.y = Math.atan2(tmpV2.x, tmpV2.z);
+      poseIdle(this.group);
+      this.killTimer -= dt;
+      if (this.killTimer <= 0) {
+        this.killTimer = 0.9 + Math.random() * 0.8;
+        const muzzle = this.group.userData.parts.muzzle;
+        const from = new THREE.Vector3();
+        muzzle.getWorldPosition(from);
+        const to = target.group.position.clone().setY(1.0);
+        effects.tracer(from, to, true);
+        sound.shot();
+        // comrades only *finish* enemies after the player has had their fun
+        if (graceElapsed) {
+          const died = target.takeHit(effects);
+          if (died) onComradeKill?.(target);
+        }
+      }
+    } else {
+      if (speed > 0.4) {
+        this.group.rotation.y = playerYaw + Math.PI; // soldier models face +Z; camera yaw 0 faces -Z
+        this.walkT += dt * (0.6 + speed * 0.12);
+        animateWalk(this.group, this.walkT, 1);
+      } else {
+        poseIdle(this.group);
+        this.group.rotation.y = playerYaw + Math.PI; // soldier models face +Z; camera yaw 0 faces -Z
+      }
+    }
+  }
+
+  setPosition(pos, yaw = 0) {
+    this.smooth.copy(pos);
+    this.group.position.copy(pos);
+    this.group.rotation.y = yaw;
+    this.initialized = true;
+  }
+
+  dispose() {
+    this.scene.remove(this.group);
+  }
+}
