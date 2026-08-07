@@ -157,8 +157,8 @@ body.touch-mode.playing .combat-btn { display: flex; }
   max-width: 94vw;
   overflow: hidden;
 }
-#hud-obj-title { font-size: 11px; letter-spacing: 0.1em; color: var(--text); }
-#hud-obj-detail { font-size: 10px; letter-spacing: 0.08em; color: var(--accent); }
+#hud-obj-title { font-size: 11px; letter-spacing: 0.1em; color: var(--text); overflow: hidden; text-overflow: ellipsis; }
+#hud-obj-detail { font-size: 10px; letter-spacing: 0.08em; color: var(--accent); flex-shrink: 0; }
 #hud-obj-detail.warn { color: var(--danger); animation: pulse 0.8s infinite; }
 
 #crosshair {
@@ -315,6 +315,48 @@ body.touch-mode.playing .combat-btn { display: flex; }
 #cb-cashout:active { transform: scale(0.98); }
 #cb-cashout:disabled { filter: grayscale(0.85) brightness(0.6); pointer-events: none; }
 #cb-hint { font-size: 9.5px; letter-spacing: 0.06em; color: var(--dim); }
+
+/* ------------------------------------------------ mobile HUD compaction
+   Touch layouts: keep every element inside the safe screen area and clear
+   of the movement stick (bottom-left) and fire cluster (bottom-right). */
+
+body.touch-mode #hud-top {
+  top: calc(6px + env(safe-area-inset-top));
+  gap: 5px;
+  padding: 5px 9px;
+  max-width: calc(100vw - 12px);
+  overflow: hidden;
+}
+body.touch-mode .hud-chip { min-width: 46px; }
+body.touch-mode .hud-chip label { font-size: 7.5px; }
+body.touch-mode .hud-chip b { font-size: 12.5px; }
+body.touch-mode .hud-chip.dim b { font-size: 11px; }
+body.touch-mode #hud-steps { gap: 2px; padding: 0 3px; }
+body.touch-mode .step-dot { width: 7px; height: 7px; }
+
+body.touch-mode #hud-objective {
+  top: calc(46px + env(safe-area-inset-top));
+  gap: 7px;
+  padding: 4px 9px;
+  max-width: calc(100vw - 12px);
+}
+body.touch-mode #hud-obj-title { font-size: 9.5px; }
+body.touch-mode #hud-obj-detail { font-size: 9px; }
+
+/* cash banner: top-center on touch so it never covers the stick/buttons */
+body.touch-mode #cash-banner {
+  bottom: auto;
+  top: calc(78px + env(safe-area-inset-top));
+  padding: 8px 14px;
+  gap: 5px;
+  max-width: calc(100vw - 16px);
+}
+body.touch-mode #cb-info b { font-size: 17px; }
+body.touch-mode #cb-cashout { min-width: 180px; padding: 9px 14px; font-size: 12.5px; }
+body.touch-mode #cb-hint { font-size: 8.5px; }
+
+body.touch-mode #hud-msg { bottom: 27%; font-size: 11px; max-width: 92vw; white-space: normal; }
+body.touch-mode #mission-title { top: 30%; }
 
 .opt {
   display: block;

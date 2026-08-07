@@ -74,6 +74,12 @@ export class EnemyBot {
       const t = Math.min(1, this.deathT / 0.5);
       this.group.rotation.x = -t * Math.PI / 2;
       this.group.position.y = this.baseY - t * 0.15;
+      // limbs sprawl as they go down
+      const parts = this.group.userData.parts;
+      parts.armL.rotation.z = t * 0.9;
+      parts.armR.rotation.z = -t * 0.9;
+      parts.legL.rotation.x = t * 0.3;
+      parts.legR.rotation.x = -t * 0.2;
       if (this.deathT > 3) {
         this.group.visible = false;
         this.state = 'dead';
@@ -94,7 +100,7 @@ export class EnemyBot {
         }
         animateWalk(this.group, this.walkT, 0.6);
       } else {
-        poseIdle(this.group);
+        poseIdle(this.group, this.walkT);
         this.group.rotation.y += Math.sin(this.walkT * 0.4) * dt * 0.3;
       }
       return;
@@ -124,13 +130,13 @@ export class EnemyBot {
           return;
         }
       }
-      poseIdle(this.group);
+      poseIdle(this.group, this.walkT);
       return;
     }
 
     tmpV.subVectors(playerPos, this.group.position);
     this.group.rotation.y = Math.atan2(tmpV.x, tmpV.z);
-    poseIdle(this.group);
+    poseIdle(this.group, this.walkT);
 
     this.fireTimer -= dt;
     if (this.fireTimer <= 0 && this.burstLeft <= 0) {
@@ -231,7 +237,7 @@ export class Comrade {
     if (target) {
       tmpV2.subVectors(target.group.position, this.group.position);
       this.group.rotation.y = Math.atan2(tmpV2.x, tmpV2.z);
-      poseIdle(this.group);
+      poseIdle(this.group, this.walkT);
       this.killTimer -= dt;
       if (this.killTimer <= 0) {
         this.killTimer = 0.9 + Math.random() * 0.8;
@@ -253,7 +259,8 @@ export class Comrade {
       this.walkT += dt * 1.4;
       animateWalk(this.group, this.walkT, 1);
     } else {
-      poseIdle(this.group);
+      this.walkT += dt * 0.25;
+      poseIdle(this.group, this.walkT * 4);
       // hold facing the commander's heading (models face +Z; camera yaw 0 faces -Z)
       this.group.rotation.y = playerYaw + Math.PI;
     }

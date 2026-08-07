@@ -39,7 +39,9 @@ export class Game {
     this.renderer = new THREE.WebGLRenderer({ canvas, antialias: true, powerPreference: 'high-performance' });
     this.renderer.setPixelRatio(Math.min(devicePixelRatio || 1, 2));
     this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
-    this.renderer.toneMappingExposure = 1.08;
+    this.renderer.toneMappingExposure = 1.12;
+    this.renderer.shadowMap.enabled = true;
+    this.renderer.shadowMap.type = IS_TOUCH ? THREE.PCFShadowMap : THREE.PCFSoftShadowMap;
     this.scene = new THREE.Scene();
     this.camera = new THREE.PerspectiveCamera(BASE_FOV, 1, 0.1, 400);
     this.effects = new Effects(this.scene);
@@ -870,8 +872,14 @@ export class Game {
     if (len > 1) wish.divideScalar(len);
     const speed = WALK_SPEED * (c.scoped ? 0.55 : 1);
 
+    // acceleration smoothing: momentum makes footwork feel weighty
+    if (!this.player.vel) this.player.vel = new THREE.Vector3();
+    const vel = this.player.vel;
+    wish.multiplyScalar(speed);
+    vel.lerp(wish, Math.min(1, dt * 11));
+
     const p = this.player.pos;
-    const step = wish.multiplyScalar(speed * dt);
+    const step = tmpV.copy(vel).multiplyScalar(dt);
     // axis-separated collision against uncarved cells
     const tryAxis = (dx, dz) => {
       const nx = p.x + dx, nz = p.z + dz;
@@ -890,8 +898,8 @@ export class Game {
       p.x = nx; p.z = nz;
       return true;
     };
-    tryAxis(step.x, 0);
-    tryAxis(0, step.z);
+    if (!tryAxis(step.x, 0)) vel.x = 0;
+    if (!tryAxis(0, step.z)) vel.z = 0;
 
     // breadcrumb trail for the trailing column
     if (this.trail) {
@@ -907,8 +915,13 @@ export class Game {
     this.player.bob += dt * (moving ? 9 : 2);
     const bobAmp = moving && !c.scoped ? 0.045 : 0.008;
 
+    // subtle strafe roll sells the momentum
+    const targetRoll = -c.move.x * 0.014;
+    if (this.camRoll === undefined) this.camRoll = 0;
+    this.camRoll += (targetRoll - this.camRoll) * Math.min(1, dt * 8);
+
     this.camera.position.set(p.x, EYE + Math.sin(this.player.bob) * bobAmp, p.z);
-    this.camera.rotation.set(c.pitch, c.yaw, 0, 'YXZ');
+    this.camera.rotation.set(c.pitch, c.yaw, this.camRoll, 'YXZ');
   }
 
   // ------------------------------------------------------------- pot / flow
@@ -1368,13 +1381,20 @@ export class Game {
         }
         this.updateComrades(dt, true);
 
-        // viewmodel kick recovery + sway
+        // viewmodel kick recovery + look-lag sway
         if (this.viewmodel) {
           this.viewmodel.position.z += (-0.45 - this.viewmodel.position.z) * Math.min(1, dt * 14);
           const targetX = this.controls.scoped ? 0.0 : 0.22;
           const targetY = (this.controls.scoped ? -0.12 : -0.2) + Math.sin(this.player.bob) * 0.006;
           this.viewmodel.position.x += (targetX - this.viewmodel.position.x) * Math.min(1, dt * 10);
           this.viewmodel.position.y += (targetY - this.viewmodel.position.y) * Math.min(1, dt * 10);
+          const dyaw = this.controls.yaw - (this.lastYaw ?? this.controls.yaw);
+          this.lastYaw = this.controls.yaw;
+          const swayTarget = THREE.MathUtils.clamp(dyaw * 5, -0.08, 0.08);
+          if (this.vmSway === undefined) this.vmSway = 0;
+          this.vmSway += (swayTarget - this.vmSway) * Math.min(1, dt * 9);
+          this.viewmodel.rotation.y = this.vmSway;
+          this.viewmodel.rotation.z = this.vmSway * 0.5 - this.controls.move.x * 0.02;
         }
         break;
       }
@@ -1395,6 +1415,14 @@ export class Game {
       this.camera.position.x += (Math.random() - 0.5) * this.shake * 0.14;
       this.camera.position.y += (Math.random() - 0.5) * this.shake * 0.14;
       this.shake *= Math.pow(0.02, dt);
+    }
+
+    // keep the sun's shadow frustum centered on the action
+    const sun = this.world.userData.sun;
+    if (sun) {
+      const anchor = this.mode === 'lobby' ? this.camera.position : this.player.pos;
+      sun.position.set(anchor.x + 45, 75, anchor.z + 28);
+      sun.target.position.set(anchor.x, 0, anchor.z);
     }
 
     this.renderer.render(this.scene, this.camera);

@@ -19,7 +19,7 @@ function getBlobTexture() {
   c.width = c.height = 64;
   const ctx = c.getContext('2d');
   const grad = ctx.createRadialGradient(32, 32, 4, 32, 32, 30);
-  grad.addColorStop(0, 'rgba(0,0,0,0.42)');
+  grad.addColorStop(0, 'rgba(0,0,0,0.26)');
   grad.addColorStop(1, 'rgba(0,0,0,0)');
   ctx.fillStyle = grad;
   ctx.fillRect(0, 0, 64, 64);
@@ -38,79 +38,99 @@ export function makeBlobShadow(radius = 0.55) {
   return m;
 }
 
+
+// Flag every lit mesh in a model tree to cast/receive real-time shadows
+// (basic/holographic materials are skipped).
+export function enableShadows(obj, { cast = true, receive = true } = {}) {
+  obj.traverse((o) => {
+    if (o.isMesh && o.material?.isMeshLambertMaterial) {
+      o.castShadow = cast;
+      o.receiveShadow = receive;
+    }
+  });
+  return obj;
+}
+
 // ---------------------------------------------------------------- soldiers
 
 export function makeSoldier(camo) {
   const g = new THREE.Group();
   const dark = (c, f = 0.72) => new THREE.Color(c).multiplyScalar(f).getHex();
+  const capsule = (r, len, c) => new THREE.Mesh(new THREE.CapsuleGeometry(r, len, 3, 10), mat(c));
+  const sphere = (r, c, w = 10, h = 7) => new THREE.Mesh(new THREE.SphereGeometry(r, w, h), mat(c));
 
-  // legs (pivot at hip for walk anim) with boots
+  // legs (groups pivot at the hip) — smooth capsule limbs, boots stay boxy
   const legL = new THREE.Group();
-  const thighL = box(0.15, 0.34, 0.17, camo.cloth);
-  thighL.position.y = -0.17;
-  const shinL = box(0.13, 0.16, 0.15, dark(camo.cloth, 0.85));
-  shinL.position.y = -0.42;
-  const bootL = box(0.15, 0.09, 0.24, 0x191a17);
-  bootL.position.set(0, -0.53, 0.03);
+  const thighL = capsule(0.078, 0.19, camo.cloth);
+  thighL.position.y = -0.15;
+  const shinL = capsule(0.062, 0.2, dark(camo.cloth, 0.85));
+  shinL.position.y = -0.4;
+  const bootL = box(0.14, 0.09, 0.25, 0x191a17);
+  bootL.position.set(0, -0.53, 0.04);
   legL.add(thighL, shinL, bootL);
   legL.position.set(-0.11, 0.56, 0);
   const legR = legL.clone();
   legR.position.x = 0.11;
 
-  // torso: shirt + plate carrier + pouches + belt + backpack
-  const torso = box(0.42, 0.5, 0.24, camo.cloth);
-  torso.position.y = 0.8;
-  const vest = box(0.46, 0.32, 0.3, camo.vest);
-  vest.position.y = 0.84;
+  // torso: capsule body + plate carrier + pouches + belt + pack
+  const torso = capsule(0.2, 0.3, camo.cloth);
+  torso.position.y = 0.82;
+  torso.scale.z = 0.72;
+  const vest = box(0.42, 0.3, 0.27, camo.vest);
+  vest.position.y = 0.86;
   const pouchRow = new THREE.Group();
   for (let i = -1; i <= 1; i++) {
-    const p = box(0.1, 0.1, 0.05, dark(camo.vest, 0.8));
-    p.position.set(i * 0.13, 0.72, 0.17);
-    pouchRow.add(p);
+    const pch = box(0.1, 0.1, 0.05, dark(camo.vest, 0.8));
+    pch.position.set(i * 0.13, 0.72, 0.16);
+    pouchRow.add(pch);
   }
-  const belt = box(0.44, 0.06, 0.26, 0x24231c);
+  const belt = box(0.4, 0.06, 0.28, 0x24231c);
   belt.position.y = 0.57;
-  const pack = box(0.34, 0.36, 0.14, dark(camo.cloth, 0.8));
-  pack.position.set(0, 0.86, -0.2);
-  const shoulderL = box(0.14, 0.07, 0.2, camo.vest);
-  shoulderL.position.set(-0.26, 1.03, 0);
+  const pack = capsule(0.16, 0.2, dark(camo.cloth, 0.8));
+  pack.position.set(0, 0.86, -0.22);
+  pack.scale.z = 0.6;
+  const shoulderL = sphere(0.085, camo.vest, 8, 6);
+  shoulderL.position.set(-0.25, 1.03, 0);
   const shoulderR = shoulderL.clone();
-  shoulderR.position.x = 0.26;
+  shoulderR.position.x = 0.25;
 
-  // head: face + goggle strip + rounded helmet with brim
-  const head = box(0.2, 0.2, 0.2, camo.skin);
-  head.position.y = 1.16;
-  const goggles = box(0.21, 0.055, 0.21, 0x14161a);
-  goggles.position.set(0, 1.19, 0.005);
+  // head: neck + sphere head + goggle strip + rounded helmet with brim
+  const neck = new THREE.Mesh(new THREE.CylinderGeometry(0.055, 0.065, 0.09, 8), mat(camo.skin));
+  neck.position.y = 1.06;
+  const head = sphere(0.115, camo.skin);
+  head.position.y = 1.17;
+  head.scale.set(0.92, 1, 0.95);
+  const goggles = box(0.2, 0.05, 0.2, 0x14161a);
+  goggles.position.set(0, 1.19, 0.01);
   const helmet = new THREE.Mesh(
-    new THREE.SphereGeometry(0.155, 10, 7, 0, Math.PI * 2, 0, Math.PI / 1.9),
-    new THREE.MeshLambertMaterial({ color: camo.helmet })
+    new THREE.SphereGeometry(0.15, 12, 8, 0, Math.PI * 2, 0, Math.PI / 1.9),
+    mat(camo.helmet)
   );
-  helmet.position.y = 1.235;
-  helmet.scale.set(1, 0.85, 1.06);
-  const brim = box(0.24, 0.03, 0.26, camo.helmet);
+  helmet.position.y = 1.225;
+  helmet.scale.set(1, 0.88, 1.08);
+  const brim = box(0.23, 0.028, 0.25, camo.helmet);
   brim.position.y = 1.245;
 
-  // arms
+  // arms (groups pivot at the shoulder)
   const armL = new THREE.Group();
-  const upperL = box(0.12, 0.24, 0.14, camo.cloth);
+  const upperL = capsule(0.058, 0.14, camo.cloth);
   upperL.position.y = -0.1;
-  const foreL = box(0.1, 0.18, 0.12, dark(camo.cloth, 0.85));
-  foreL.position.y = -0.3;
-  const gloveL = box(0.09, 0.07, 0.1, 0x1e1d19);
-  gloveL.position.y = -0.41;
+  const foreL = capsule(0.05, 0.14, dark(camo.cloth, 0.85));
+  foreL.position.set(0, -0.29, 0.02);
+  const gloveL = sphere(0.052, 0x1e1d19, 8, 6);
+  gloveL.position.set(0, -0.4, 0.03);
   armL.add(upperL, foreL, gloveL);
-  armL.position.set(-0.28, 1.0, 0);
+  armL.position.set(-0.27, 1.0, 0);
   const armR = armL.clone();
-  armR.position.x = 0.28;
+  armR.position.x = 0.27;
 
   // rifle: receiver + barrel + suppressor + foregrip + mag + stock + optic
   const rifle = new THREE.Group();
   const receiver = box(0.055, 0.08, 0.42, 0x14161a);
-  const barrel = new THREE.Mesh(new THREE.CylinderGeometry(0.016, 0.016, 0.3, 6), new THREE.MeshLambertMaterial({ color: 0x101215 }));
+  const barrel = new THREE.Mesh(new THREE.CylinderGeometry(0.016, 0.016, 0.3, 8), mat(0x101215));
   barrel.rotation.x = Math.PI / 2;
   barrel.position.set(0, 0.01, 0.33);
-  const suppressor = new THREE.Mesh(new THREE.CylinderGeometry(0.026, 0.026, 0.12, 6), new THREE.MeshLambertMaterial({ color: 0x0c0e10 }));
+  const suppressor = new THREE.Mesh(new THREE.CylinderGeometry(0.026, 0.026, 0.12, 8), mat(0x0c0e10));
   suppressor.rotation.x = Math.PI / 2;
   suppressor.position.set(0, 0.01, 0.52);
   const magazine = box(0.045, 0.13, 0.07, 0x1c1f24);
@@ -131,15 +151,19 @@ export function makeSoldier(camo) {
   const shadow = makeBlobShadow(0.5);
 
   g.add(legL, legR, torso, vest, pouchRow, belt, pack, shoulderL, shoulderR,
-    head, goggles, helmet, brim, armL, armR, rifle, shadow);
+    neck, head, goggles, helmet, brim, armL, armR, rifle, shadow);
 
   // muzzle tip in soldier-local space (for tracer origins)
   const muzzle = new THREE.Object3D();
   muzzle.position.set(0.12, 0.92, 0.88);
   g.add(muzzle);
 
-  g.userData.parts = { legL, legR, armL, armR, torso, head, rifle, muzzle };
+  g.userData.parts = {
+    legL, legR, armL, armR, torso, head, rifle, muzzle,
+    torsoY: 0.82, rifleRotX: -0.06
+  };
   g.traverse((o) => { o.userData.soldierRoot = g; });
+  enableShadows(g);
   // scale to human height (~1.75m) so soldiers stand eye-to-eye with the
   // first-person camera
   g.scale.setScalar(1.32);
@@ -149,38 +173,42 @@ export function makeSoldier(camo) {
 // Unarmed civilian / asset for escort objectives.
 export function makeCivilian(shirtColor = 0x7a6a4a) {
   const g = new THREE.Group();
+  const capsule = (r, len, c) => new THREE.Mesh(new THREE.CapsuleGeometry(r, len, 3, 10), mat(c));
   const legL = new THREE.Group();
-  const thigh = box(0.14, 0.34, 0.16, 0x33383e);
-  thigh.position.y = -0.17;
-  const shin = box(0.12, 0.18, 0.13, 0x2b2f34);
-  shin.position.y = -0.43;
+  const thigh = capsule(0.072, 0.19, 0x33383e);
+  thigh.position.y = -0.15;
+  const shin = capsule(0.058, 0.2, 0x2b2f34);
+  shin.position.y = -0.4;
   const shoe = box(0.13, 0.07, 0.2, 0x1c1c1a);
-  shoe.position.set(0, -0.54, 0.02);
+  shoe.position.set(0, -0.53, 0.02);
   legL.add(thigh, shin, shoe);
   legL.position.set(-0.1, 0.56, 0);
   const legR = legL.clone();
   legR.position.x = 0.1;
-  const torso = box(0.4, 0.5, 0.22, shirtColor);
+  const torso = capsule(0.19, 0.28, shirtColor);
   torso.position.y = 0.8;
-  const head = box(0.19, 0.2, 0.19, 0xc9a06c);
+  torso.scale.z = 0.7;
+  const head = new THREE.Mesh(new THREE.SphereGeometry(0.115, 10, 7), mat(0xc9a06c));
   head.position.y = 1.16;
-  const hair = box(0.2, 0.07, 0.2, 0x2c2420);
-  hair.position.y = 1.28;
+  const hair = new THREE.Mesh(
+    new THREE.SphereGeometry(0.12, 10, 7, 0, Math.PI * 2, 0, Math.PI / 2.1), mat(0x2c2420));
+  hair.position.y = 1.19;
   const armL = new THREE.Group();
-  const upper = box(0.11, 0.24, 0.13, shirtColor);
+  const upper = capsule(0.052, 0.14, shirtColor);
   upper.position.y = -0.1;
-  const fore = box(0.09, 0.18, 0.11, 0xc9a06c);
-  fore.position.y = -0.3;
+  const fore = capsule(0.045, 0.14, 0xc9a06c);
+  fore.position.y = -0.29;
   armL.add(upper, fore);
-  armL.position.set(-0.26, 1.0, 0);
+  armL.position.set(-0.25, 1.0, 0);
   const armR = armL.clone();
-  armR.position.x = 0.26;
+  armR.position.x = 0.25;
   g.add(legL, legR, torso, head, hair, armL, armR, makeBlobShadow(0.45));
   const muzzle = new THREE.Object3D();
   muzzle.position.set(0, 0.9, 0.4);
   g.add(muzzle);
-  g.userData.parts = { legL, legR, armL, armR, torso, head, rifle: new THREE.Group(), muzzle };
+  g.userData.parts = { legL, legR, armL, armR, torso, head, rifle: null, muzzle, torsoY: 0.8 };
   g.traverse((o) => { o.userData.soldierRoot = g; });
+  enableShadows(g);
   g.scale.setScalar(1.3);
   return g;
 }
@@ -391,33 +419,47 @@ export function makeObjectiveProp(kind) {
     });
     g.scale.y = Math.max(0.45, g.scale.y * 0.55);
   };
-  return g;
+  return enableShadows(g);
 }
 
 export function animateWalk(soldier, t, speed = 1) {
   const p = soldier.userData.parts;
-  const s = Math.sin(t * 7 * speed) * 0.5;
-  p.legL.rotation.x = s;
-  p.legR.rotation.x = -s;
+  const ph = t * 7 * speed;
+  const s = Math.sin(ph);
+  p.legL.rotation.x = s * 0.55;
+  p.legR.rotation.x = -s * 0.55;
+  // arms counter-swing (kept subtle — hands are on the weapon)
+  p.armL.rotation.x = -s * 0.22;
+  p.armR.rotation.x = s * 0.16;
+  // gait bounce + slight forward lean
+  p.torso.position.y = (p.torsoY ?? 0.82) + Math.abs(Math.cos(ph)) * 0.022;
+  soldier.rotation.x = 0.03 * Math.min(1, speed);
+  if (p.rifle) p.rifle.rotation.x = (p.rifleRotX ?? -0.06) + Math.sin(ph * 2) * 0.012;
 }
 
-export function poseIdle(soldier) {
+export function poseIdle(soldier, t = 0) {
   const p = soldier.userData.parts;
   p.legL.rotation.x = 0;
   p.legR.rotation.x = 0;
+  p.armL.rotation.x = 0;
+  p.armR.rotation.x = 0;
+  soldier.rotation.x = 0;
+  // breathing + weapon sway
+  p.torso.position.y = (p.torsoY ?? 0.82) + Math.sin(t * 1.7) * 0.008;
+  if (p.rifle) p.rifle.rotation.x = (p.rifleRotX ?? -0.06) + Math.sin(t * 1.3) * 0.01;
 }
 
 // ---------------------------------------------------------------- vehicles
 
 export function makeVehicle(type) {
   switch (type) {
-    case 'boat': return makeBoat();
-    case 'heli': return makeHeli();
-    case 'parachute': return makeParachute();
-    case 'apc': return makeApc();
-    case 'truck': return makeTruck();
+    case 'boat': return enableShadows(makeBoat());
+    case 'heli': return enableShadows(makeHeli());
+    case 'parachute': return enableShadows(makeParachute());
+    case 'apc': return enableShadows(makeApc());
+    case 'truck': return enableShadows(makeTruck());
     case 'humvee':
-    default: return makeHumvee();
+    default: return enableShadows(makeHumvee());
   }
 }
 
@@ -528,7 +570,7 @@ export function makeCar(rng) {
     });
     g.scale.y = 0.72;
   };
-  return g;
+  return enableShadows(g);
 }
 
 function makeParachute() {

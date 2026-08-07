@@ -102,11 +102,25 @@ export function buildWorld(scene, map, env, rng) {
   scene.background = new THREE.Color(env.sky);
   scene.fog = new THREE.FogExp2(env.fog, env.fogDensity);
 
-  // ---- lights
-  const hemi = new THREE.HemisphereLight(env.hemi, env.hemiGround, env.night ? 0.55 : 0.9);
+  // ---- lights (sun casts real-time shadows; its frustum follows the player)
+  // hemisphere runs a little hotter now that real shadows darken the
+  // sun-averted faces
+  const hemi = new THREE.HemisphereLight(env.hemi, env.hemiGround, env.night ? 0.65 : 1.08);
   const sun = new THREE.DirectionalLight(env.sun, env.sunIntensity);
   sun.position.set(40, 70, 25);
-  group.add(hemi, sun);
+  sun.castShadow = true;
+  const isCoarse = matchMedia('(pointer: coarse)').matches;
+  sun.shadow.mapSize.set(isCoarse ? 1024 : 2048, isCoarse ? 1024 : 2048);
+  sun.shadow.camera.left = -42;
+  sun.shadow.camera.right = 42;
+  sun.shadow.camera.top = 42;
+  sun.shadow.camera.bottom = -42;
+  sun.shadow.camera.near = 10;
+  sun.shadow.camera.far = 200;
+  sun.shadow.bias = -0.0006;
+  sun.shadow.normalBias = 0.02;
+  group.add(hemi, sun, sun.target);
+  group.userData.sun = sun;
 
   // ---- sky dome + sun impostor (fog-immune, so the horizon reads as haze)
   const skyDome = new THREE.Mesh(
@@ -273,6 +287,17 @@ export function buildWorld(scene, map, env, rng) {
   padRing.position.set(endW.x, 0.05, endW.z);
   padRing.name = 'exfilRing';
   group.add(pad, padRing);
+
+  // ---- shadow flags: every lit surface casts + receives; the huge ground
+  // and water planes only receive
+  group.traverse((o) => {
+    if (o.isMesh && o.material?.isMeshLambertMaterial) {
+      o.castShadow = true;
+      o.receiveShadow = true;
+    }
+  });
+  ground.castShadow = false;
+  pathMesh.castShadow = false;
 
   scene.add(group);
   return group;
