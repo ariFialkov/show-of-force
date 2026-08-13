@@ -3,7 +3,7 @@ const VERSION = 'sof-v1';
 const PRECACHE = [
   './',
   './index.html',
-  './manifest.webmanifest',
+  './manifest.json',
   './icons/icon.svg',
   './icons/icon-192.png',
   './icons/icon-512.png',
