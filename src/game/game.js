@@ -1209,6 +1209,7 @@ export class Game {
     const p = this.player;
     if (p.fragTimer > 0) return;
     p.fragTimer = FRAG_COOLDOWN;
+    this.throwAnimT = 0.55; // rifle tucks aside while the off-hand throws
     this.cb.onFrag?.(FRAG_COOLDOWN);
     const dir = new THREE.Vector3();
     this.camera.getWorldDirection(dir);
@@ -1839,9 +1840,15 @@ export class Game {
 
         // viewmodel kick recovery + look-lag sway
         if (this.viewmodel) {
+          // grenade toss gesture: rifle dips aside for a beat and returns
+          let toss = 0;
+          if (this.throwAnimT > 0) {
+            this.throwAnimT -= dt;
+            toss = Math.sin(Math.PI * (1 - Math.max(0, this.throwAnimT) / 0.55));
+          }
           this.viewmodel.position.z += (-0.45 - this.viewmodel.position.z) * Math.min(1, dt * 14);
-          const targetX = this.controls.scoped ? 0.0 : 0.22;
-          const targetY = (this.controls.scoped ? -0.12 : -0.2) + Math.sin(this.player.bob) * 0.006;
+          const targetX = (this.controls.scoped ? 0.0 : 0.22) + toss * 0.12;
+          const targetY = (this.controls.scoped ? -0.12 : -0.2) - toss * 0.2 + Math.sin(this.player.bob) * 0.006;
           this.viewmodel.position.x += (targetX - this.viewmodel.position.x) * Math.min(1, dt * 10);
           this.viewmodel.position.y += (targetY - this.viewmodel.position.y) * Math.min(1, dt * 10);
           const dyaw = this.controls.yaw - (this.lastYaw ?? this.controls.yaw);
@@ -1850,7 +1857,8 @@ export class Game {
           if (this.vmSway === undefined) this.vmSway = 0;
           this.vmSway += (swayTarget - this.vmSway) * Math.min(1, dt * 9);
           this.viewmodel.rotation.y = this.vmSway;
-          this.viewmodel.rotation.z = this.vmSway * 0.5 - this.controls.move.x * 0.02;
+          this.viewmodel.rotation.x = -toss * 0.5;
+          this.viewmodel.rotation.z = this.vmSway * 0.5 - this.controls.move.x * 0.02 + toss * 0.3;
         }
         break;
       }

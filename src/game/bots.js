@@ -18,6 +18,15 @@ const tmpV2 = new THREE.Vector3();
 
 let nextBotId = 1;
 
+// Rate-limited shortest-arc turn toward a heading, so characters visibly
+// rotate (the walk/idle cycle sells the turn) instead of snap-facing.
+// A 180 at the default rate takes ~0.45s.
+function slewYaw(group, target, dt, rate = 7) {
+  let d = target - group.rotation.y;
+  d = ((d + Math.PI) % (2 * Math.PI) + 2 * Math.PI) % (2 * Math.PI) - Math.PI;
+  group.rotation.y += Math.max(-rate * dt, Math.min(rate * dt, d));
+}
+
 export class EnemyBot {
   constructor(scene, pos, patrolTo, seg, opts = {}) {
     this.id = nextBotId++;
@@ -117,7 +126,7 @@ export class EnemyBot {
         this.group.position.lerpVectors(this.home, this.patrolTo, this.patrolT);
         tmpV.subVectors(this.patrolDir > 0 ? this.patrolTo : this.home, this.group.position);
         if (tmpV.lengthSq() > 0.001) {
-          this.group.rotation.y = Math.atan2(tmpV.x, tmpV.z);
+          slewYaw(this.group, Math.atan2(tmpV.x, tmpV.z), dt, 4.5);
         }
         animateWalk(this.group, this.walkT, 0.6);
       } else {
@@ -146,7 +155,7 @@ export class EnemyBot {
           const p = this.group.position;
           if (ctx.isWalkable?.(p.x + tmpV.x * spd + Math.sign(tmpV.x) * 0.5, p.z) ?? true) p.x += tmpV.x * spd;
           if (ctx.isWalkable?.(p.x, p.z + tmpV.z * spd + Math.sign(tmpV.z) * 0.5) ?? true) p.z += tmpV.z * spd;
-          this.group.rotation.y = Math.atan2(tmpV.x, tmpV.z);
+          slewYaw(this.group, Math.atan2(tmpV.x, tmpV.z), dt, 8);
           animateWalk(this.group, this.walkT, 0.8);
           return;
         }
@@ -156,7 +165,7 @@ export class EnemyBot {
     }
 
     tmpV.subVectors(playerPos, this.group.position);
-    this.group.rotation.y = Math.atan2(tmpV.x, tmpV.z);
+    slewYaw(this.group, Math.atan2(tmpV.x, tmpV.z), dt, 10);
     if (this.burstLeft > 0) poseFire(this.group, this.walkT);
     else poseCombat(this.group, this.walkT);
 
@@ -255,7 +264,7 @@ export class Comrade {
       const step = Math.min(dist, speed * dt);
       tmpV.normalize();
       this.smooth.addScaledVector(tmpV, step);
-      this.group.rotation.y = Math.atan2(tmpV.x, tmpV.z);
+      slewYaw(this.group, Math.atan2(tmpV.x, tmpV.z), dt, 9);
       moving = step > dt * 0.7;
       gait = speed / 1.9; // walk near formation, break into a run to catch up
     }
@@ -263,7 +272,7 @@ export class Comrade {
 
     if (target) {
       tmpV2.subVectors(target.group.position, this.group.position);
-      this.group.rotation.y = Math.atan2(tmpV2.x, tmpV2.z);
+      slewYaw(this.group, Math.atan2(tmpV2.x, tmpV2.z), dt, 10);
       this.fireAnimT -= dt;
       if (this.fireAnimT > 0) poseFire(this.group, this.walkT);
       else poseCombat(this.group, this.walkT);
@@ -292,7 +301,7 @@ export class Comrade {
       this.walkT += dt * 0.25;
       poseIdle(this.group, this.walkT * 4);
       // hold facing the commander's heading (models face +Z; camera yaw 0 faces -Z)
-      this.group.rotation.y = playerYaw + Math.PI;
+      slewYaw(this.group, playerYaw + Math.PI, dt, 5);
     }
   }
 
