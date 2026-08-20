@@ -69,6 +69,9 @@ export async function initRigged(url) {
       zones: section('zone', Uint8Array),
       index: header.indexType === 'u16' ? section('index', Uint16Array) : section('index', Uint32Array),
       boneDefs, boneInverses,
+      gear: header.gear ?? {},
+      gearGeomCache: new Map(),
+      gearSection: section,
       clips,
       // random pool for gunshot deaths; explosion deaths are cause-specific
       deathNames: Object.keys(clips).filter((n) => n.startsWith('death') && !n.includes('explosion')),
@@ -91,21 +94,22 @@ function paletteKey(camo, mask) {
   return [camo.cloth, camo.vest, camo.helmet, camo.skin, mask ? 'm' : 'f'].join(':');
 }
 
-function getPaletteGeometry(camo, mask) {
-  const key = paletteKey(camo, mask);
+// Readability lift: the faction palettes are authored dark (military), but
+// under scene lighting near-black cloth renders as a silhouette. Raise
+// lightness with a floor + gain, keeping hue/saturation, so every zone
+// stays distinguishable in shadow without losing faction identity.
+const liftHsl = { h: 0, s: 0, l: 0 };
+function lift(c) {
+  c.getHSL(liftHsl);
+  c.setHSL(liftHsl.h, Math.min(1, liftHsl.s * 1.05), Math.min(0.82, 0.17 + liftHsl.l * 1.05));
+  return c;
+}
+
+function getPaletteGeometry(camo, mask, hideHelmet = false) {
+  const key = paletteKey(camo, mask) + (hideHelmet ? ':hh' : '');
   if (paletteGeomCache.has(key)) return paletteGeomCache.get(key);
 
   const dark = (hex, f) => new THREE.Color(hex).multiplyScalar(f);
-  // Readability lift: the faction palettes are authored dark (military),
-  // but under scene lighting near-black cloth renders as a silhouette.
-  // Raise lightness with a floor + gain, keeping hue/saturation, so every
-  // zone stays distinguishable in shadow without losing faction identity.
-  const hsl = { h: 0, s: 0, l: 0 };
-  const lift = (c) => {
-    c.getHSL(hsl);
-    c.setHSL(hsl.h, Math.min(1, hsl.s * 1.05), Math.min(0.82, 0.17 + hsl.l * 1.05));
-    return c;
-  };
   const zoneColors = [
     new THREE.Color(camo.cloth),
     dark(camo.cloth, 0.82),
@@ -118,14 +122,18 @@ function getPaletteGeometry(camo, mask) {
     new THREE.Color(0x35362e)
   ].map(lift);
   const n = template.zones.length;
-  const colors = new Uint8Array(n * 3);
+  // RGBA: alpha 0 + material alphaTest discards the built-in modeled
+  // helmet/antenna when a real headgear asset replaces it
+  const colors = new Uint8Array(n * 4);
   for (let i = 0; i < n; i++) {
-    const c = zoneColors[template.zones[i]];
+    const zone = template.zones[i];
+    const c = zoneColors[zone];
     // deterministic per-vertex grain so surfaces don't read flat
     const g = 1 + (((i * 2654435761) >>> 16 & 255) / 255 - 0.5) * 0.09;
-    colors[i * 3] = Math.min(255, c.r * 255 * g);
-    colors[i * 3 + 1] = Math.min(255, c.g * 255 * g);
-    colors[i * 3 + 2] = Math.min(255, c.b * 255 * g);
+    colors[i * 4] = Math.min(255, c.r * 255 * g);
+    colors[i * 4 + 1] = Math.min(255, c.g * 255 * g);
+    colors[i * 4 + 2] = Math.min(255, c.b * 255 * g);
+    colors[i * 4 + 3] = hideHelmet && zone === 3 ? 0 : 255;
   }
 
   const geom = new THREE.BufferGeometry();
@@ -134,13 +142,28 @@ function getPaletteGeometry(camo, mask) {
   geom.setAttribute('normal', new THREE.BufferAttribute(template.normal, 3, true));
   geom.setAttribute('skinIndex', new THREE.BufferAttribute(template.skinIndex, 4));
   geom.setAttribute('skinWeight', new THREE.BufferAttribute(template.skinWeight, 4, true));
-  geom.setAttribute('color', new THREE.BufferAttribute(colors, 3, true));
+  geom.setAttribute('color', new THREE.BufferAttribute(colors, 4, true));
   // generous bounds: animations move limbs outside the bind-pose box, and
   // death clips translate the whole body away from the origin — the
   // explosion death launches it almost 3m
   geom.boundingSphere = new THREE.Sphere(new THREE.Vector3(0, template.headY * 0.5, 0), template.headY * 4.2);
   geom.boundingBox = null;
   paletteGeomCache.set(key, geom);
+  return geom;
+}
+
+// ------------------------------------------------------------------ gear
+
+// Baked headgear geometry, already expressed in head-bone local space.
+export function getGearGeometry(name) {
+  if (!template.gear[name]) return null;
+  if (template.gearGeomCache.has(name)) return template.gearGeomCache.get(name);
+  const geom = new THREE.BufferGeometry();
+  geom.setAttribute('position', new THREE.BufferAttribute(template.gearSection(`gear:${name}:p`, Float32Array), 3));
+  geom.setAttribute('normal', new THREE.BufferAttribute(template.gearSection(`gear:${name}:n`, Int8Array), 3, true));
+  geom.setIndex(new THREE.BufferAttribute(template.gearSection(`gear:${name}:i`, Uint16Array), 1));
+  geom.computeBoundingSphere();
+  template.gearGeomCache.set(name, geom);
   return geom;
 }
 
@@ -208,18 +231,26 @@ function blobShadow(radius) {
 
 // Build one character. Returns a group with the same userData contract as
 // the procedural soldiers (parts, tick, rig flag).
-export function makeRiggedSoldier(camo, { rifle = true, mask = true, civilian = false } = {}) {
+export function makeRiggedSoldier(camo, { rifle = true, mask = true, civilian = false, headgear = null } = {}) {
   const outer = new THREE.Group();
   outer.userData.civilian = civilian;
 
   const { root: boneRoot, map: boneMap, bones } = buildBones();
   const skeleton = new THREE.Skeleton(bones, template.boneInverses.map((m) => m.clone()));
 
+  // The modeled head is one helmet+goggles unit, so most headgear LAYERS
+  // over it; full-head assets (balaclava) instead hide the modeled crown
+  // via vertex alpha + alphaTest and take its place.
+  const gearMeta = headgear ? template.gear[headgear] : null;
+  const hideCrown = !!gearMeta?.replaceHead;
   const mesh = new THREE.SkinnedMesh(
-    getPaletteGeometry(camo, mask),
+    getPaletteGeometry(camo, mask, hideCrown),
     // subtle specular so helmets, vests and gear catch highlights and the
     // body shape reads even against a dark backdrop
-    new THREE.MeshPhongMaterial({ vertexColors: true, specular: 0x2e2e2e, shininess: 22 })
+    new THREE.MeshPhongMaterial({
+      vertexColors: true, specular: 0x2e2e2e, shininess: 22,
+      alphaTest: hideCrown ? 0.5 : 0
+    })
   );
   mesh.add(boneRoot);
   mesh.bind(skeleton, new THREE.Matrix4());
@@ -310,6 +341,24 @@ export function makeRiggedSoldier(camo, { rifle = true, mask = true, civilian = 
     outer.add(muzzle);
     muzzle.position.set(0, 1.2, 0.4);
   }
+  // team headgear parented to the head bone (geometry is baked in
+  // head-bone local space), tinted with the faction helmet color
+  if (headgear) {
+    const gg = getGearGeometry(headgear);
+    const headB = boneMap.get('mixamorigHead');
+    if (gg && headB) {
+      const gm = new THREE.Mesh(gg, new THREE.MeshPhongMaterial({
+        color: lift(new THREE.Color(camo.helmet)),
+        specular: 0x2e2e2e,
+        shininess: 18,
+        // full-head gear shows its interior through eye/neck openings
+        side: gearMeta?.replaceHead ? THREE.DoubleSide : THREE.FrontSide
+      }));
+      gm.castShadow = !IS_TOUCH;
+      headB.add(gm);
+    }
+  }
+
   mixer?.update(Math.random() * 2); // desync instances
 
   // adapter so the existing bot/animation code can drive the rig

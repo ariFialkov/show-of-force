@@ -54,8 +54,8 @@ export function enableShadows(obj, { cast = true, receive = true } = {}) {
 
 // ---------------------------------------------------------------- soldiers
 
-export function makeSoldier(camo) {
-  if (riggedReady()) return makeRiggedSoldier(camo);
+export function makeSoldier(camo, opts = {}) {
+  if (riggedReady()) return makeRiggedSoldier(camo, opts);
   const g = new THREE.Group();
   const dark = (c, f = 0.72) => new THREE.Color(c).multiplyScalar(f).getHex();
   const capsule = (r, len, c) => new THREE.Mesh(new THREE.CapsuleGeometry(r, len, 3, 10), mat(c));

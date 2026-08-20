@@ -9,15 +9,14 @@
 // Usage: npm run bake:trooper [-- path/to/source.fbx] [targetTris]
 
 globalThis.window = globalThis;
-globalThis.document = {
-  createElementNS: () => ({ style: {} }),
-  createElement: () => ({ style: {}, getContext: () => null })
-};
+const fakeEl = () => ({ style: {}, addEventListener: () => {}, removeEventListener: () => {}, setAttribute: () => {}, getContext: () => null });
+globalThis.document = { createElementNS: fakeEl, createElement: fakeEl };
 
 import fs from 'node:fs';
 import path from 'node:path';
 const THREE = await import('three');
 const { FBXLoader } = await import('three/examples/jsm/loaders/FBXLoader.js');
+const { OBJLoader } = await import('three/examples/jsm/loaders/OBJLoader.js');
 const { MeshoptSimplifier } = await import('meshoptimizer');
 
 const SRC = process.argv[2] ?? 'assets-src/trooper.fbx';
@@ -291,6 +290,152 @@ if (fs.existsSync(ANIM_DIR)) {
   }
 }
 
+// -------------------------------------------------------------------- gear
+// Team headgear from assets-src/gear/: arbitrary FBX/OBJ assets are merged,
+// welded, decimated and auto-fitted onto the trooper's measured head box,
+// then stored in HEAD-BONE LOCAL space so the runtime simply parents them
+// to the head bone. Per-asset fit tweaks below (tuned from screenshots).
+const GEAR_DIR = 'assets-src/gear';
+// anchor 'top': gear bbox top lands at head-box top + pad (caps/helmets)
+// anchor 'center': gear bbox center at head center + dy (face-mounted gear)
+// replaceHead: the asset IS a full head (balaclava) — the runtime hides the
+// modeled helmet crown underneath via vertex alpha
+const GEAR_FIT = {
+  'helmet-delta':     { target: 3200, widthRel: 1.38, anchor: 'top', pad: 0.5, rot: [0, 0, 0], dz: 0 },
+  'helmet-seal':      { target: 2800, widthRel: 1.08, anchor: 'center', dy: 0.55, rot: [-Math.PI / 2, Math.PI, 0], dz: 1.2 },
+  'helmet-beret':     { target: 1600, widthRel: 1.30, anchor: 'top', pad: 0.55, rot: [0, 0, 0], dz: 0 },
+  'helmet-balaclava': { target: 2400, widthRel: 1.12, anchor: 'top', pad: 0.25, rot: [0, 0, 0], dz: 0, replaceHead: true }
+};
+
+// head box from the final mesh: dominant-weight Head vertices, y-clamped to
+// cut the antenna accessory and the neck out of the measurement
+const headIdxCanon = boneIndexByName.get('mixamorigHead');
+const headBox = new THREE.Box3();
+for (let v = 0; v < used; v++) {
+  let maxK = 0;
+  for (let k = 1; k < 4; k++) if (outSkinW[v * 4 + k] > outSkinW[v * 4 + maxK]) maxK = k;
+  if (outSkinIdx[v * 4 + maxK] !== headIdxCanon) continue;
+  const y = outPos[v * 3 + 1];
+  if (y < headY - 1.5 || y > headY + 3.6) continue;
+  headBox.expandByPoint(new THREE.Vector3(outPos[v * 3], y, outPos[v * 3 + 2]));
+}
+const headSize = new THREE.Vector3();
+headBox.getSize(headSize);
+const headCenter = new THREE.Vector3();
+headBox.getCenter(headCenter);
+console.log('head box:', headSize.toArray().map((x) => +x.toFixed(2)), 'center', headCenter.toArray().map((x) => +x.toFixed(2)));
+
+const headWorldInv = new THREE.Matrix4()
+  .copy(boneOrder.find((b) => b.name.endsWith('Head')).matrixWorld).invert();
+
+function bakeGearAsset(name, root, cfg) {
+  root.updateMatrixWorld(true);
+  // merge all meshes into one position soup (world-transformed)
+  const soup = [];
+  const tv = new THREE.Vector3();
+  root.traverse((o) => {
+    if (!o.isMesh) return;
+    const g = o.geometry;
+    const pos = g.attributes.position;
+    const push = (vi) => {
+      tv.fromBufferAttribute(pos, vi).applyMatrix4(o.matrixWorld);
+      soup.push(tv.x, tv.y, tv.z);
+    };
+    if (g.index) for (let i = 0; i < g.index.count; i++) push(g.index.array[i]);
+    else for (let i = 0; i < pos.count; i++) push(i);
+  });
+  const nVerts = soup.length / 3;
+
+  // weld by quantized position (tolerance relative to asset size)
+  const soupBox = new THREE.Box3();
+  for (let i = 0; i < soup.length; i += 3) soupBox.expandByPoint(tv.set(soup[i], soup[i + 1], soup[i + 2]));
+  const soupSize = new THREE.Vector3();
+  soupBox.getSize(soupSize);
+  const q = 2000 / Math.max(soupSize.x, soupSize.y, soupSize.z);
+  const weldMapG = new Map();
+  const remapG = new Uint32Array(nVerts);
+  const uniq = [];
+  for (let v = 0; v < nVerts; v++) {
+    const key = `${Math.round(soup[v * 3] * q)},${Math.round(soup[v * 3 + 1] * q)},${Math.round(soup[v * 3 + 2] * q)}`;
+    let idx = weldMapG.get(key);
+    if (idx === undefined) {
+      idx = uniq.length / 3;
+      weldMapG.set(key, idx);
+      uniq.push(soup[v * 3], soup[v * 3 + 1], soup[v * 3 + 2]);
+    }
+    remapG[v] = idx;
+  }
+  const idxArr = [];
+  for (let t = 0; t < nVerts; t += 3) {
+    const a = remapG[t], b = remapG[t + 1], c = remapG[t + 2];
+    if (a !== b && b !== c && a !== c) idxArr.push(a, b, c);
+  }
+  const positions = Float32Array.from(uniq);
+  const [simp] = MeshoptSimplifier.simplify(Uint32Array.from(idxArr), positions, 3, cfg.target * 3, 0.05, []);
+
+  // compact
+  const remap2 = new Int32Array(positions.length / 3).fill(-1);
+  let usedG = 0;
+  for (const i of simp) if (remap2[i] === -1) remap2[i] = usedG++;
+  const outP = new Float32Array(usedG * 3);
+  for (let i = 0; i < remap2.length; i++) {
+    const j = remap2[i];
+    if (j === -1) continue;
+    outP[j * 3] = positions[i * 3];
+    outP[j * 3 + 1] = positions[i * 3 + 1];
+    outP[j * 3 + 2] = positions[i * 3 + 2];
+  }
+  const outI = new Uint16Array(simp.length);
+  for (let i = 0; i < simp.length; i++) outI[i] = remap2[simp[i]];
+
+  // fit: center -> rotate -> scale to head width -> place on the head, all
+  // in bind-world space, then re-express in head-bone local space
+  const geom = new THREE.BufferGeometry();
+  geom.setAttribute('position', new THREE.BufferAttribute(outP, 3));
+  geom.setIndex(new THREE.BufferAttribute(outI, 1));
+  geom.computeBoundingBox();
+  const c0 = new THREE.Vector3();
+  geom.boundingBox.getCenter(c0);
+  geom.translate(-c0.x, -c0.y, -c0.z);
+  geom.rotateX(cfg.rot[0]); geom.rotateY(cfg.rot[1]); geom.rotateZ(cfg.rot[2]);
+  geom.computeBoundingBox();
+  const gs = new THREE.Vector3();
+  geom.boundingBox.getSize(gs);
+  const s = (cfg.widthRel * headSize.x) / Math.max(gs.x, gs.z);
+  geom.scale(s, s, s);
+  geom.computeBoundingBox();
+  const bb = geom.boundingBox;
+  let ty;
+  if (cfg.anchor === 'top') ty = (headBox.max.y + (cfg.pad ?? 0)) - bb.max.y;
+  else if (cfg.anchor === 'center') ty = (headCenter.y + (cfg.dy ?? 0)) - (bb.min.y + bb.max.y) / 2;
+  else ty = (headBox.min.y + (cfg.yFrac ?? 0) * headSize.y) - bb.min.y;
+  geom.translate(headCenter.x, ty, headCenter.z + (cfg.dz ?? 0));
+  geom.applyMatrix4(headWorldInv); // into head-bone local space
+  geom.computeVertexNormals();
+  const nrmAttr = geom.attributes.normal;
+  const outN = new Int8Array(usedG * 3);
+  for (let i = 0; i < usedG * 3; i++) outN[i] = Math.max(-127, Math.min(127, Math.round(nrmAttr.array[i] * 127)));
+  console.log(`gear '${name}': ${nVerts / 3} tris -> ${outI.length / 3} tris, ${usedG} verts`);
+  return { name, position: geom.attributes.position.array, normal: outN, index: outI };
+}
+
+const gearBaked = [];
+if (fs.existsSync(GEAR_DIR)) {
+  for (const f of fs.readdirSync(GEAR_DIR).sort()) {
+    const name = f.replace(/\.(fbx|obj)$/i, '');
+    const cfg = GEAR_FIT[name];
+    if (!cfg) { console.warn(`  ${f}: no GEAR_FIT entry, skipped`); continue; }
+    let root;
+    if (f.toLowerCase().endsWith('.obj')) {
+      root = new OBJLoader().parse(fs.readFileSync(path.join(GEAR_DIR, f), 'utf8'));
+    } else if (f.toLowerCase().endsWith('.fbx')) {
+      const gbuf = fs.readFileSync(path.join(GEAR_DIR, f));
+      root = new FBXLoader().parse(gbuf.buffer.slice(gbuf.byteOffset, gbuf.byteOffset + gbuf.byteLength), '');
+    } else continue;
+    gearBaked.push(bakeGearAsset(name, root, cfg));
+  }
+}
+
 // ------------------------------------------------------------------- write
 
 const sections = [];
@@ -326,6 +471,17 @@ clips.forEach((c, ci) => {
     t.valuesSection = `c${ci}v${ti}`;
   });
 });
+header.gear = {};
+for (const g of gearBaked) {
+  header.gear[g.name] = {
+    vertexCount: g.position.length / 3,
+    triCount: g.index.length / 3,
+    replaceHead: !!GEAR_FIT[g.name]?.replaceHead
+  };
+  addSection(`gear:${g.name}:p`, g.position);
+  addSection(`gear:${g.name}:n`, g.normal);
+  addSection(`gear:${g.name}:i`, g.index);
+}
 
 const headerBytes = new TextEncoder().encode(JSON.stringify(header));
 const headerPad = Math.ceil(headerBytes.length / 4) * 4;

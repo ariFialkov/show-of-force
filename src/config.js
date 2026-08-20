@@ -11,6 +11,7 @@ export const TEAMS = {
     vehicle: 'humvee',
     vehicleName: 'M1245 Assault Humvee',
     backup: 'flashgl',
+    gear: 'helmet-delta',
     camo: { cloth: 0x5b5843, vest: 0x3d3a2c, helmet: 0x4a4636, skin: 0xc9a06c }
   },
   seals: {
@@ -23,6 +24,7 @@ export const TEAMS = {
     vehicle: 'boat',
     vehicleName: 'Stealth CRRC Dinghy',
     backup: 'harpoon',
+    gear: 'helmet-seal',
     camo: { cloth: 0x3a4148, vest: 0x272c31, helmet: 0x30363c, skin: 0xb98d5e }
   },
   berets: {
@@ -35,6 +37,7 @@ export const TEAMS = {
     vehicle: 'truck',
     vehicleName: 'GMV Jungle Runner',
     backup: 'knife',
+    gear: 'helmet-beret',
     camo: { cloth: 0x3f5233, vest: 0x2c3b24, helmet: 0x36452c, skin: 0xa97b4f }
   },
   rangers: {
@@ -47,6 +50,7 @@ export const TEAMS = {
     vehicle: 'parachute',
     vehicleName: 'MC-6 Static Line Drop',
     backup: 'shotgun',
+    gear: 'helmet-delta',
     camo: { cloth: 0x55503f, vest: 0x3c382c, helmet: 0x46422f, skin: 0xd3a878 }
   },
   sicarios: {
@@ -59,6 +63,7 @@ export const TEAMS = {
     vehicle: 'apc',
     vehicleName: 'BearCat G3 APC',
     backup: 'rpg',
+    gear: 'helmet-balaclava',
     camo: { cloth: 0x23262b, vest: 0x15171b, helmet: 0x1d2025, skin: 0xb98d5e }
   }
 };

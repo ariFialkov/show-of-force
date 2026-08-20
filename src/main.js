@@ -18,8 +18,10 @@ const game = new Game(document.getElementById('gl'), {
   btnFrag: ui.els.btnFrag
 });
 
-// debugging hook (harmless in production; used by automated smoke tests)
+// debugging hooks (harmless in production; used by automated smoke tests)
 window.__game = game;
+import('./game/models.js').then((m) => { window.__makeSoldier = m.makeSoldier; });
+import('./game/rigged.js').then((m) => { window.__rigged = m; });
 
 // unlock audio on first interaction
 game.controls.onFirstInteract = () => sound.ensure();

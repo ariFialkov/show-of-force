@@ -240,7 +240,8 @@ export class Game {
     const start = this.player.pos;
     for (let i = 0; i < this.comradeSlots.length; i++) {
       const colOffset = this.comradeSlots[i] - this.playerSlot; // <0 ahead, >0 behind
-      const c = new Comrade(this.scene, this.mission.team.camo, this.mission.roster[i]);
+      const c = new Comrade(this.scene, this.mission.team.camo, this.mission.roster[i], null,
+        { headgear: this.mission.team.gear });
       c.setPosition(
         new THREE.Vector3(start.x - fwd.x * colOffset * COLUMN_SPACING, 0, start.z - fwd.z * colOffset * COLUMN_SPACING),
         this.controls.yaw + Math.PI

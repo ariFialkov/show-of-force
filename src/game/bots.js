@@ -233,9 +233,9 @@ export class EnemyBot {
 }
 
 export class Comrade {
-  constructor(scene, camo, roster, model = null) {
+  constructor(scene, camo, roster, model = null, opts = {}) {
     this.scene = scene;
-    this.group = model ?? makeSoldier(camo);
+    this.group = model ?? makeSoldier(camo, opts);
     scene.add(this.group);
     this.callsign = roster?.callsign ?? 'Bravo';
     this.walkT = Math.random() * 10;
