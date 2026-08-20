@@ -105,7 +105,7 @@ export function buildWorld(scene, map, env, rng) {
   // ---- lights (sun casts real-time shadows; its frustum follows the player)
   // hemisphere runs a little hotter now that real shadows darken the
   // sun-averted faces
-  const hemi = new THREE.HemisphereLight(env.hemi, env.hemiGround, env.night ? 0.65 : 1.08);
+  const hemi = new THREE.HemisphereLight(env.hemi, env.hemiGround, env.night ? 0.85 : 1.2);
   const sun = new THREE.DirectionalLight(env.sun, env.sunIntensity);
   sun.position.set(40, 70, 25);
   sun.castShadow = true;

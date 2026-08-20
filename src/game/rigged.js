@@ -96,17 +96,27 @@ function getPaletteGeometry(camo, mask) {
   if (paletteGeomCache.has(key)) return paletteGeomCache.get(key);
 
   const dark = (hex, f) => new THREE.Color(hex).multiplyScalar(f);
+  // Readability lift: the faction palettes are authored dark (military),
+  // but under scene lighting near-black cloth renders as a silhouette.
+  // Raise lightness with a floor + gain, keeping hue/saturation, so every
+  // zone stays distinguishable in shadow without losing faction identity.
+  const hsl = { h: 0, s: 0, l: 0 };
+  const lift = (c) => {
+    c.getHSL(hsl);
+    c.setHSL(hsl.h, Math.min(1, hsl.s * 1.05), Math.min(0.82, 0.17 + hsl.l * 1.05));
+    return c;
+  };
   const zoneColors = [
     new THREE.Color(camo.cloth),
-    dark(camo.cloth, 0.8),
+    dark(camo.cloth, 0.82),
     new THREE.Color(camo.vest),
     new THREE.Color(camo.helmet),
     // the head mesh wears goggles + face cover — bare-skin paint reads
     // wrong on it, so soldiers get a dark balaclava; civilians keep skin
-    mask ? dark(camo.cloth, 0.42) : new THREE.Color(camo.skin),
-    new THREE.Color(0x232219),
-    new THREE.Color(0x1b1c18)
-  ];
+    mask ? dark(camo.cloth, 0.6) : new THREE.Color(camo.skin),
+    new THREE.Color(0x3a3c33),
+    new THREE.Color(0x35362e)
+  ].map(lift);
   const n = template.zones.length;
   const colors = new Uint8Array(n * 3);
   for (let i = 0; i < n; i++) {
@@ -153,7 +163,7 @@ function buildBones() {
 }
 
 function makeRifle() {
-  const mat = (c) => new THREE.MeshLambertMaterial({ color: c });
+  const mat = (c) => new THREE.MeshPhongMaterial({ color: c, specular: 0x555555, shininess: 30 });
   const box = (w, h, d, c) => new THREE.Mesh(new THREE.BoxGeometry(w, h, d), mat(c));
   const rifle = new THREE.Group();
   const receiver = box(0.055, 0.08, 0.42, 0x14161a);
@@ -207,7 +217,9 @@ export function makeRiggedSoldier(camo, { rifle = true, mask = true, civilian = 
 
   const mesh = new THREE.SkinnedMesh(
     getPaletteGeometry(camo, mask),
-    new THREE.MeshLambertMaterial({ vertexColors: true })
+    // subtle specular so helmets, vests and gear catch highlights and the
+    // body shape reads even against a dark backdrop
+    new THREE.MeshPhongMaterial({ vertexColors: true, specular: 0x2e2e2e, shininess: 22 })
   );
   mesh.add(boneRoot);
   mesh.bind(skeleton, new THREE.Matrix4());
