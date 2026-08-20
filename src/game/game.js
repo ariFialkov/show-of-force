@@ -1893,6 +1893,12 @@ export class Game {
 
   updateComrades(dt, combat) {
     const r = this.round;
+    // squad moves crouched while a stealth objective is live and unblown
+    const o = this.objective;
+    const sneaking = !!o && o.mech === 'stealth' && !o.done && !o.compromised;
+    for (let i = 0; i < this.comrades.length; i++) {
+      this.comrades[i].group.userData.crouched = sneaking;
+    }
     for (let i = 0; i < this.comrades.length; i++) {
       const colOffset = this.comradeSlots[i] - this.playerSlot;
       const dist = Math.abs(colOffset) * COLUMN_SPACING + (colOffset > 0 ? 1.1 : 0);

@@ -196,8 +196,9 @@ function blobShadow(radius) {
 
 // Build one character. Returns a group with the same userData contract as
 // the procedural soldiers (parts, tick, rig flag).
-export function makeRiggedSoldier(camo, { rifle = true, mask = true } = {}) {
+export function makeRiggedSoldier(camo, { rifle = true, mask = true, civilian = false } = {}) {
   const outer = new THREE.Group();
+  outer.userData.civilian = civilian;
 
   const { root: boneRoot, map: boneMap, bones } = buildBones();
   const skeleton = new THREE.Skeleton(bones, template.boneInverses.map((m) => m.clone()));
@@ -330,7 +331,11 @@ export function riggedWalk(soldier, t, speed = 1) {
   const r = soldier.userData.rig;
   if (!r) return;
   if (r.actions?.walk) {
-    if (speed >= 1.4 && r.actions.run) {
+    if (soldier.userData.civilian && r.actions['unarmed-run']) {
+      r.play('unarmed-run', { fade: 0.2, timeScale: Math.max(0.7, Math.min(1.4, 0.55 + speed * 0.35)) });
+    } else if (soldier.userData.crouched && r.actions['crouch-walk']) {
+      r.play('crouch-walk', { fade: 0.25, timeScale: Math.max(0.7, Math.min(1.5, 0.5 + speed * 0.5)) });
+    } else if (speed >= 1.4 && r.actions.run) {
       r.play('run', { fade: 0.16, timeScale: Math.min(1.5, 0.75 + speed * 0.15) });
     } else {
       r.play('walk', { fade: 0.22, timeScale: Math.max(0.6, Math.min(1.6, 0.55 + speed * 0.55)) });
@@ -352,7 +357,17 @@ export function riggedWalk(soldier, t, speed = 1) {
 export function riggedIdle(soldier) {
   const r = soldier.userData.rig;
   soldier.rotation.x = 0;
-  r?.play?.('idle', { fade: 0.25 });
+  if (!r?.play) return;
+  if (soldier.userData.civilian && r.actions['scared-idle']) r.play('scared-idle', { fade: 0.25 });
+  else if (soldier.userData.crouched && r.actions['crouch-idle']) r.play('crouch-idle', { fade: 0.25 });
+  else r.play('idle', { fade: 0.25 });
+}
+
+// Flashbang daze: staggering stun loop while the timer runs.
+export function riggedStun(soldier) {
+  const r = soldier.userData.rig;
+  if (!r?.play) return false;
+  return r.play('stun', { fade: 0.15 });
 }
 
 // Play a random baked death clip. Returns its duration, or 0 when none are

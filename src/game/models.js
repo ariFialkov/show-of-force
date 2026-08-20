@@ -2,7 +2,7 @@
 // Everything is built from primitives so the game ships with zero assets.
 
 import * as THREE from 'three';
-import { riggedReady, makeRiggedSoldier, riggedWalk, riggedIdle, riggedDeath, riggedHit, riggedAim, riggedFire } from './rigged.js';
+import { riggedReady, makeRiggedSoldier, riggedWalk, riggedIdle, riggedDeath, riggedHit, riggedAim, riggedFire, riggedStun } from './rigged.js';
 
 const mat = (color, opts = {}) => new THREE.MeshLambertMaterial({ color, ...opts });
 
@@ -180,7 +180,7 @@ export function makeCivilian(shirtColor = 0x7a6a4a) {
       vest: new THREE.Color(shirtColor).multiplyScalar(0.8).getHex(),
       helmet: 0x2c2420, // head-top zone reads as hair on civilians
       skin: 0xc9a06c
-    }, { rifle: false, mask: false });
+    }, { rifle: false, mask: false, civilian: true });
   }
   const g = new THREE.Group();
   const capsule = (r, len, c) => new THREE.Mesh(new THREE.CapsuleGeometry(r, len, 3, 10), mat(c));
@@ -562,6 +562,13 @@ export function poseCombat(soldier, t = 0) {
 export function poseFire(soldier, t = 0) {
   if (soldier.userData.rig) return riggedFire(soldier);
   poseIdle(soldier, t);
+}
+
+// Flashbang daze. Procedural models sway in place instead.
+export function poseStun(soldier, t = 0) {
+  if (soldier.userData.rig && riggedStun(soldier)) return;
+  poseIdle(soldier, t);
+  soldier.rotation.y += Math.sin(t * 16) * 0.02;
 }
 
 export function poseIdle(soldier, t = 0) {

@@ -6,7 +6,7 @@
 // guarantee every active enemy dies eventually.
 
 import * as THREE from 'three';
-import { makeSoldier, animateWalk, poseIdle, poseCombat, poseFire, startDeath, startHit } from './models.js';
+import { makeSoldier, animateWalk, poseIdle, poseCombat, poseFire, poseStun, startDeath, startHit } from './models.js';
 import { sound } from './effects.js';
 
 // reddish insurgent fatigues with desaturated gear so the vest/helmet read
@@ -105,8 +105,7 @@ export class EnemyBot {
     // flash-stunned: dazed in place, can't fight
     if (this.stunT > 0) {
       this.stunT -= dt;
-      poseIdle(this.group, this.walkT);
-      this.group.rotation.y += Math.sin(this.walkT * 16) * dt * 1.4;
+      poseStun(this.group, this.walkT);
       return;
     }
 
