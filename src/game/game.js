@@ -14,7 +14,7 @@ import { RISK_FACTORS } from '../config.js';
 import { buildWorld } from './world.js';
 import { Effects, sound } from './effects.js';
 import { EnemyBot, Comrade } from './bots.js';
-import { makeVehicle, makeCar, makeCivilian, makeObjectiveProp, makeGate, makeBackupViewmodel, animateWalk, poseIdle } from './models.js';
+import { makeVehicle, makeCar, makeCivilian, makeObjectiveProp, makeGate, makeBackupViewmodel, animateWalk, poseIdle, poseSit } from './models.js';
 
 // Squad backup weapons (hold FIRE on mobile / N on desktop to switch)
 const BACKUPS = {
@@ -459,6 +459,9 @@ export class Game {
         const cx = pr.start.x + Math.cos(ang) * 4.5 + Math.sin(t * 1.1 + i) * sway;
         const cz = pr.start.z + Math.sin(ang) * 4.5 + Math.cos(t * 0.9 + i) * sway;
         this.comrades[i].setPosition(new THREE.Vector3(cx, cAlt, cz), pr.yaw + Math.PI);
+        // seated-harness posture under canopy, upright for the landing
+        if (cAlt > 3) poseSit(this.comrades[i].group, t * 3 + i);
+        else poseIdle(this.comrades[i].group, t * 3 + i);
         const chute = this.preludeChutes[i];
         chute.position.set(cx, cAlt + 0.1, cz);
         chute.rotation.y = pr.yaw;
@@ -501,7 +504,7 @@ export class Game {
         const world = this.vehicle.localToWorld(pr.seats[i].clone());
         const c = this.comrades[i];
         c.setPosition(world, (pr.vehYaw ?? pr.yaw) + (pr.seats[i].z > 0 ? Math.PI : 0));
-        poseIdle(c.group, t * 3 + i * 1.7);
+        poseSit(c.group, t * 3 + i * 1.7);
       }
 
       this.camera.position.lerpVectors(pr.craneFrom, pr.craneTo, ease(t / tApp));
@@ -883,8 +886,8 @@ export class Game {
       for (const e of this.enemies) {
         if (e.alive && e.group.position.distanceTo(blast) < 6.5 &&
             this.losClear(blast, e.group.position.clone().setY(1.2))) {
-          e.takeHit(this.effects);
-          e.takeHit(this.effects);
+          e.takeHit(this.effects, 'explosion', blast);
+          e.takeHit(this.effects, 'explosion', blast);
           if (!e.alive) this.registerKill(e, by);
         }
       }
@@ -1172,8 +1175,8 @@ export class Game {
         for (const e of this.enemies) {
           if (e.alive && e.group.position.distanceTo(impact) < 5.5 &&
               this.losClear(impact.clone().setY(0.8), e.group.position.clone().setY(1.2))) {
-            e.takeHit(this.effects);
-            const died = e.takeHit(this.effects);
+            e.takeHit(this.effects, 'explosion', impact);
+            const died = e.takeHit(this.effects, 'explosion', impact);
             if (died || !e.alive) this.registerKill(e, 'player');
           }
         }
@@ -1250,8 +1253,8 @@ export class Game {
         for (const e of this.enemies) {
           if (e.alive && e.group.position.distanceTo(g.mesh.position) < 5.5 &&
               this.losClear(blast, e.group.position.clone().setY(1.2))) {
-            e.takeHit(this.effects);
-            const died = e.takeHit(this.effects);
+            e.takeHit(this.effects, 'explosion', g.mesh.position);
+            const died = e.takeHit(this.effects, 'explosion', g.mesh.position);
             if (died || !e.alive) this.registerKill(e, 'player');
           }
         }

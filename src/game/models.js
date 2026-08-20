@@ -2,7 +2,7 @@
 // Everything is built from primitives so the game ships with zero assets.
 
 import * as THREE from 'three';
-import { riggedReady, makeRiggedSoldier, riggedWalk, riggedIdle, riggedDeath, riggedHit, riggedAim, riggedFire, riggedStun } from './rigged.js';
+import { riggedReady, makeRiggedSoldier, riggedWalk, riggedIdle, riggedDeath, riggedHit, riggedAim, riggedFire, riggedStun, riggedReload, riggedSit } from './rigged.js';
 
 const mat = (color, opts = {}) => new THREE.MeshLambertMaterial({ color, ...opts });
 
@@ -539,11 +539,24 @@ export function animateWalk(soldier, t, speed = 1) {
   if (p.rifle) p.rifle.rotation.x = (p.rifleRotX ?? -0.06) + Math.sin(ph * 2) * 0.012;
 }
 
-// Start a death animation. Returns the clip duration, or 0 when the model
-// has no baked death clips (caller falls back to the procedural collapse).
-export function startDeath(soldier) {
-  if (soldier.userData.rig) return riggedDeath(soldier);
+// Start a death animation ('gunfire' or 'explosion'). Returns the clip
+// duration, or 0 when the model has no baked death clips (caller falls
+// back to the procedural collapse).
+export function startDeath(soldier, cause = 'gunfire') {
+  if (soldier.userData.rig) return riggedDeath(soldier, cause);
   return 0;
+}
+
+// One-shot magazine change. Returns the clip duration (0 = unavailable).
+export function startReload(soldier) {
+  if (soldier.userData.rig) return riggedReload(soldier);
+  return 0;
+}
+
+// Seated transport idle (insertion cinematic). Falls back to standing idle.
+export function poseSit(soldier, t = 0) {
+  if (soldier.userData.rig && riggedSit(soldier)) return;
+  poseIdle(soldier, t);
 }
 
 // One-shot flinch on a non-lethal hit (no-op on procedural models).

@@ -6,7 +6,7 @@
 // guarantee every active enemy dies eventually.
 
 import * as THREE from 'three';
-import { makeSoldier, animateWalk, poseIdle, poseCombat, poseFire, poseStun, startDeath, startHit } from './models.js';
+import { makeSoldier, animateWalk, poseIdle, poseCombat, poseFire, poseStun, startDeath, startHit, startReload } from './models.js';
 import { sound } from './effects.js';
 
 // reddish insurgent fatigues with desaturated gear so the vest/helmet read
@@ -50,6 +50,8 @@ export class EnemyBot {
     this.fireTimer = 1 + Math.random() * 1.6;
     this.burstLeft = 0;
     this.burstTimer = 0;
+    this.burstsFired = 0;
+    this.reloadT = 0;
     this.deathT = 0;
     this.walkT = Math.random() * 10;
   }
@@ -63,7 +65,9 @@ export class EnemyBot {
     }
   }
 
-  takeHit(effects) {
+  // blastFrom (optional, explosion kills): the blast center — the body is
+  // turned so the baked launch (along its facing) carries it away from it
+  takeHit(effects, cause = 'gunfire', blastFrom = null) {
     if (!this.alive) return false;
     this.hp -= 1;
     effects.hitSpark(tmpV.copy(this.group.position).setY(1.0).add(
@@ -72,7 +76,11 @@ export class EnemyBot {
     if (this.hp <= 0) {
       this.state = 'dying';
       this.deathT = 0;
-      this.deathClipDur = startDeath(this.group); // 0 -> procedural collapse
+      if (cause === 'explosion' && blastFrom) {
+        const p = this.group.position;
+        this.group.rotation.y = Math.atan2(p.x - blastFrom.x, p.z - blastFrom.z);
+      }
+      this.deathClipDur = startDeath(this.group, cause); // 0 -> procedural collapse
       return true;
     }
     startHit(this.group); // survived — flinch
@@ -169,10 +177,23 @@ export class EnemyBot {
     if (this.burstLeft > 0) poseFire(this.group, this.walkT);
     else poseCombat(this.group, this.walkT);
 
+    // mid-magazine change: weapon down, no shooting until it finishes
+    if (this.reloadT > 0) {
+      this.reloadT -= dt;
+      return;
+    }
+
     this.fireTimer -= dt;
     if (this.fireTimer <= 0 && this.burstLeft <= 0) {
+      if (this.burstsFired >= 3) {
+        this.burstsFired = 0;
+        this.reloadT = startReload(this.group) || 1.4;
+        this.fireTimer = 0.3 + Math.random() * 0.6;
+        return;
+      }
       this.burstLeft = 3 + Math.floor(Math.random() * 3);
       this.burstTimer = 0;
+      this.burstsFired++;
       this.fireTimer = 1.4 + Math.random() * 1.8;
     }
     if (this.burstLeft > 0) {
@@ -220,6 +241,7 @@ export class Comrade {
     this.walkT = Math.random() * 10;
     this.killTimer = 0;
     this.fireAnimT = 0;
+    this.shotsFired = Math.floor(Math.random() * 4); // desync squad reloads
     this.smooth = new THREE.Vector3();
     this.initialized = false;
   }
@@ -292,6 +314,15 @@ export class Comrade {
         if (graceElapsed) {
           const died = target.takeHit(effects);
           if (died) onComradeKill?.(target);
+        }
+        // fresh magazine every few shots — pauses the trigger, not the column
+        if (++this.shotsFired >= 6) {
+          this.shotsFired = 0;
+          const rd = startReload(this.group);
+          if (rd > 0) {
+            this.killTimer = rd + 0.5;
+            this.fireAnimT = 0;
+          }
         }
       }
     } else if (moving) {

@@ -70,7 +70,8 @@ export async function initRigged(url) {
       index: header.indexType === 'u16' ? section('index', Uint16Array) : section('index', Uint32Array),
       boneDefs, boneInverses,
       clips,
-      deathNames: Object.keys(clips).filter((n) => n.startsWith('death')),
+      // random pool for gunshot deaths; explosion deaths are cause-specific
+      deathNames: Object.keys(clips).filter((n) => n.startsWith('death') && !n.includes('explosion')),
       hitNames: Object.keys(clips).filter((n) => n.startsWith('hit')),
       scale: TARGET_HEIGHT / height,
       minY: header.minY,
@@ -125,8 +126,9 @@ function getPaletteGeometry(camo, mask) {
   geom.setAttribute('skinWeight', new THREE.BufferAttribute(template.skinWeight, 4, true));
   geom.setAttribute('color', new THREE.BufferAttribute(colors, 3, true));
   // generous bounds: animations move limbs outside the bind-pose box, and
-  // death clips translate the whole body a stride away from the origin
-  geom.boundingSphere = new THREE.Sphere(new THREE.Vector3(0, template.headY * 0.5, 0), template.headY * 2.2);
+  // death clips translate the whole body away from the origin — the
+  // explosion death launches it almost 3m
+  geom.boundingSphere = new THREE.Sphere(new THREE.Vector3(0, template.headY * 0.5, 0), template.headY * 4.2);
   geom.boundingBox = null;
   paletteGeomCache.set(key, geom);
   return geom;
@@ -370,14 +372,32 @@ export function riggedStun(soldier) {
   return r.play('stun', { fade: 0.15 });
 }
 
-// Play a random baked death clip. Returns its duration, or 0 when none are
-// baked (the caller then falls back to the procedural collapse).
-export function riggedDeath(soldier) {
+// Play a baked death clip — the blast-thrown variant for explosive kills,
+// otherwise a random pick from the gunshot pool. Returns its duration, or 0
+// when none are baked (the caller then falls back to the procedural collapse).
+export function riggedDeath(soldier, cause = 'gunfire') {
   const r = soldier.userData.rig;
-  if (!r?.play || !template?.deathNames.length) return 0;
-  const name = template.deathNames[Math.floor(Math.random() * template.deathNames.length)];
-  if (!r.play(name, { fade: 0.1, once: true, force: true })) return 0;
+  if (!r?.play || !template) return 0;
+  let name = null;
+  if (cause === 'explosion' && template.clips['death-explosion']) name = 'death-explosion';
+  else if (template.deathNames.length) name = template.deathNames[Math.floor(Math.random() * template.deathNames.length)];
+  if (!name || !r.play(name, { fade: 0.1, once: true, force: true })) return 0;
   return template.clips[name].duration;
+}
+
+// One-shot magazine change: weapon lowered, bot can't fire until it ends.
+export function riggedReload(soldier) {
+  const r = soldier.userData.rig;
+  if (!r?.play || !template?.clips.reload) return 0;
+  if (!r.play('reload', { fade: 0.14, once: true })) return 0;
+  return template.clips.reload.duration;
+}
+
+// Seated transport idle for the insertion cinematic.
+export function riggedSit(soldier) {
+  const r = soldier.userData.rig;
+  if (!r?.play) return false;
+  return r.play('sit', { fade: 0.2 });
 }
 
 // Flinch from a non-lethal hit: one-shot reaction, after which the bot's
