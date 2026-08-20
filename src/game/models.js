@@ -2,6 +2,7 @@
 // Everything is built from primitives so the game ships with zero assets.
 
 import * as THREE from 'three';
+import { riggedReady, makeRiggedSoldier, riggedWalk, riggedIdle } from './rigged.js';
 
 const mat = (color, opts = {}) => new THREE.MeshLambertMaterial({ color, ...opts });
 
@@ -54,6 +55,7 @@ export function enableShadows(obj, { cast = true, receive = true } = {}) {
 // ---------------------------------------------------------------- soldiers
 
 export function makeSoldier(camo) {
+  if (riggedReady()) return makeRiggedSoldier(camo);
   const g = new THREE.Group();
   const dark = (c, f = 0.72) => new THREE.Color(c).multiplyScalar(f).getHex();
   const capsule = (r, len, c) => new THREE.Mesh(new THREE.CapsuleGeometry(r, len, 3, 10), mat(c));
@@ -172,6 +174,14 @@ export function makeSoldier(camo) {
 
 // Unarmed civilian / asset for escort objectives.
 export function makeCivilian(shirtColor = 0x7a6a4a) {
+  if (riggedReady()) {
+    return makeRiggedSoldier({
+      cloth: shirtColor,
+      vest: new THREE.Color(shirtColor).multiplyScalar(0.8).getHex(),
+      helmet: 0x2c2420, // head-top zone reads as hair on civilians
+      skin: 0xc9a06c
+    }, { rifle: false, mask: false });
+  }
   const g = new THREE.Group();
   const capsule = (r, len, c) => new THREE.Mesh(new THREE.CapsuleGeometry(r, len, 3, 10), mat(c));
   const legL = new THREE.Group();
@@ -514,6 +524,7 @@ export function makeObjectiveProp(kind) {
 }
 
 export function animateWalk(soldier, t, speed = 1) {
+  if (soldier.userData.rig) return riggedWalk(soldier, t, speed);
   const p = soldier.userData.parts;
   const ph = t * 7 * speed;
   const s = Math.sin(ph);
@@ -529,6 +540,7 @@ export function animateWalk(soldier, t, speed = 1) {
 }
 
 export function poseIdle(soldier, t = 0) {
+  if (soldier.userData.rig) return riggedIdle(soldier);
   const p = soldier.userData.parts;
   p.legL.rotation.x = 0;
   p.legR.rotation.x = 0;

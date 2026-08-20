@@ -234,8 +234,14 @@ game.cb.onRoundEnd = ({ result, payout, step, kills }) => {
 
 // ----------------------------------------------------------------- boot
 
-ui.buildStepDots();
-enterLobby();
+import('./game/rigged.js').then(async ({ initRigged }) => {
+  ui.els.deployingTitle.textContent = 'LOADING OPERATOR ASSETS…';
+  ui.els.deployingCount.textContent = '▚';
+  ui.els.deploying.classList.remove('hidden');
+  await initRigged(import.meta.env.BASE_URL + 'models/trooper.bin');
+  ui.els.deploying.classList.add('hidden');
+  enterLobby();
+});
 
 // PWA service worker
 if ('serviceWorker' in navigator && import.meta.env.PROD) {

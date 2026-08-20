@@ -1,5 +1,10 @@
-// Show of Force service worker: app-shell precache + runtime cache-first.
-const VERSION = 'sof-v1';
+// Show of Force service worker.
+//
+// - navigations: network-first so new deploys are picked up immediately,
+//   cached shell as offline fallback
+// - hashed build assets (/assets/): cache-first (immutable by filename)
+// - everything else (models, icons, manifest): stale-while-revalidate
+const VERSION = 'sof-v2';
 const PRECACHE = [
   './',
   './index.html',
@@ -27,19 +32,46 @@ self.addEventListener('activate', (e) => {
 self.addEventListener('fetch', (e) => {
   const url = new URL(e.request.url);
   if (e.request.method !== 'GET' || url.origin !== location.origin) return;
-  e.respondWith(
-    caches.match(e.request, { ignoreSearch: e.request.mode === 'navigate' }).then((cached) => {
-      if (cached) return cached;
-      return fetch(e.request).then((res) => {
-        if (res.ok && (url.pathname.includes('/assets/') || PRECACHE.some((p) => url.pathname.endsWith(p.slice(1))))) {
+
+  if (e.request.mode === 'navigate') {
+    e.respondWith(
+      fetch(e.request).then((res) => {
+        if (res.ok) {
           const clone = res.clone();
           caches.open(VERSION).then((c) => c.put(e.request, clone));
         }
         return res;
-      }).catch(() => {
-        if (e.request.mode === 'navigate') return caches.match('./index.html');
-        throw new Error('offline');
-      });
+      }).catch(() =>
+        caches.match(e.request, { ignoreSearch: true }).then((m) => m ?? caches.match('./index.html'))
+      )
+    );
+    return;
+  }
+
+  if (url.pathname.includes('/assets/')) {
+    e.respondWith(
+      caches.match(e.request).then((cached) => cached ?? fetch(e.request).then((res) => {
+        if (res.ok) {
+          const clone = res.clone();
+          caches.open(VERSION).then((c) => c.put(e.request, clone));
+        }
+        return res;
+      }))
+    );
+    return;
+  }
+
+  // stale-while-revalidate for models, icons, manifest
+  e.respondWith(
+    caches.match(e.request).then((cached) => {
+      const refresh = fetch(e.request).then((res) => {
+        if (res.ok) {
+          const clone = res.clone();
+          caches.open(VERSION).then((c) => c.put(e.request, clone));
+        }
+        return res;
+      }).catch(() => cached);
+      return cached ?? refresh;
     })
   );
 });

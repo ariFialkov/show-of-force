@@ -9,7 +9,9 @@ import * as THREE from 'three';
 import { makeSoldier, animateWalk, poseIdle } from './models.js';
 import { sound } from './effects.js';
 
-const ENEMY_CAMO = { cloth: 0x6b3f33, vest: 0x4a2a22, helmet: 0x3c2620, skin: 0xb98d5e };
+// reddish insurgent fatigues with desaturated gear so the vest/helmet read
+// as separate equipment instead of one flat mass
+const ENEMY_CAMO = { cloth: 0x6b4035, vest: 0x453c31, helmet: 0x2f2a23, skin: 0xb98d5e };
 const UP = new THREE.Vector3(0, 1, 0);
 const tmpV = new THREE.Vector3();
 const tmpV2 = new THREE.Vector3();
@@ -75,12 +77,10 @@ export class EnemyBot {
       const t = Math.min(1, this.deathT / 0.5);
       this.group.rotation.x = -t * Math.PI / 2;
       this.group.position.y = this.baseY - t * 0.15;
-      // limbs sprawl as they go down
+      // limbs sprawl as they go down (skeleton is frozen — no tick)
       const parts = this.group.userData.parts;
-      parts.armL.rotation.z = t * 0.9;
-      parts.armR.rotation.z = -t * 0.9;
-      parts.legL.rotation.x = t * 0.3;
-      parts.legR.rotation.x = -t * 0.2;
+      if (parts.armL) parts.armL.rotation.z += t * 0.02;
+      if (parts.armR) parts.armR.rotation.z -= t * 0.02;
       if (this.deathT > 3) {
         this.group.visible = false;
         this.state = 'dead';
@@ -88,6 +88,8 @@ export class EnemyBot {
       return;
     }
     if (this.state === 'dead') return;
+
+    this.group.userData.tick?.(dt); // rigged models advance their idle clip
 
     // flash-stunned: dazed in place, can't fight
     if (this.stunT > 0) {
@@ -206,6 +208,8 @@ export class Comrade {
   // commander's own trail), stopping to trade fire when enemies are up.
   update(dt, ctx) {
     const { targetPos, playerYaw, enemies, effects, graceElapsed, onComradeKill } = ctx;
+
+    this.group.userData.tick?.(dt); // rigged models advance their idle clip
 
     if (!this.initialized) {
       this.smooth.copy(targetPos);
