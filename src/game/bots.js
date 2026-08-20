@@ -6,7 +6,7 @@
 // guarantee every active enemy dies eventually.
 
 import * as THREE from 'three';
-import { makeSoldier, animateWalk, poseIdle, startDeath } from './models.js';
+import { makeSoldier, animateWalk, poseIdle, poseCombat, poseFire, startDeath, startHit } from './models.js';
 import { sound } from './effects.js';
 
 // reddish insurgent fatigues with desaturated gear so the vest/helmet read
@@ -66,6 +66,7 @@ export class EnemyBot {
       this.deathClipDur = startDeath(this.group); // 0 -> procedural collapse
       return true;
     }
+    startHit(this.group); // survived — flinch
     return false;
   }
 
@@ -151,13 +152,14 @@ export class EnemyBot {
           return;
         }
       }
-      poseIdle(this.group, this.walkT);
+      poseCombat(this.group, this.walkT); // alert, weapon up, no target
       return;
     }
 
     tmpV.subVectors(playerPos, this.group.position);
     this.group.rotation.y = Math.atan2(tmpV.x, tmpV.z);
-    poseIdle(this.group, this.walkT);
+    if (this.burstLeft > 0) poseFire(this.group, this.walkT);
+    else poseCombat(this.group, this.walkT);
 
     this.fireTimer -= dt;
     if (this.fireTimer <= 0 && this.burstLeft <= 0) {
@@ -209,6 +211,7 @@ export class Comrade {
     this.callsign = roster?.callsign ?? 'Bravo';
     this.walkT = Math.random() * 10;
     this.killTimer = 0;
+    this.fireAnimT = 0;
     this.smooth = new THREE.Vector3();
     this.initialized = false;
   }
@@ -262,10 +265,13 @@ export class Comrade {
     if (target) {
       tmpV2.subVectors(target.group.position, this.group.position);
       this.group.rotation.y = Math.atan2(tmpV2.x, tmpV2.z);
-      poseIdle(this.group, this.walkT);
+      this.fireAnimT -= dt;
+      if (this.fireAnimT > 0) poseFire(this.group, this.walkT);
+      else poseCombat(this.group, this.walkT);
       this.killTimer -= dt;
       if (this.killTimer <= 0) {
         this.killTimer = 0.9 + Math.random() * 0.8;
+        this.fireAnimT = 0.5;
         const muzzle = this.group.userData.parts.muzzle;
         const from = new THREE.Vector3();
         muzzle.getWorldPosition(from);

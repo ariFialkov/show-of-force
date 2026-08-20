@@ -2,7 +2,7 @@
 // Everything is built from primitives so the game ships with zero assets.
 
 import * as THREE from 'three';
-import { riggedReady, makeRiggedSoldier, riggedWalk, riggedIdle, riggedDeath } from './rigged.js';
+import { riggedReady, makeRiggedSoldier, riggedWalk, riggedIdle, riggedDeath, riggedHit, riggedAim, riggedFire } from './rigged.js';
 
 const mat = (color, opts = {}) => new THREE.MeshLambertMaterial({ color, ...opts });
 
@@ -544,6 +544,24 @@ export function animateWalk(soldier, t, speed = 1) {
 export function startDeath(soldier) {
   if (soldier.userData.rig) return riggedDeath(soldier);
   return 0;
+}
+
+// One-shot flinch on a non-lethal hit (no-op on procedural models).
+export function startHit(soldier) {
+  if (soldier.userData.rig) return riggedHit(soldier);
+  return 0;
+}
+
+// Combat stances — weapon shouldered / firing. Procedural models keep
+// their idle pose.
+export function poseCombat(soldier, t = 0) {
+  if (soldier.userData.rig) return riggedAim(soldier);
+  poseIdle(soldier, t);
+}
+
+export function poseFire(soldier, t = 0) {
+  if (soldier.userData.rig) return riggedFire(soldier);
+  poseIdle(soldier, t);
 }
 
 export function poseIdle(soldier, t = 0) {

@@ -71,6 +71,7 @@ export async function initRigged(url) {
       boneDefs, boneInverses,
       clips,
       deathNames: Object.keys(clips).filter((n) => n.startsWith('death')),
+      hitNames: Object.keys(clips).filter((n) => n.startsWith('hit')),
       scale: TARGET_HEIGHT / height,
       minY: header.minY,
       headY: header.headY
@@ -241,10 +242,15 @@ export function makeRiggedSoldier(camo, { rifle = true, mask = true } = {}) {
     rigState.current = 'idle';
     mixer.update(0.0001);
   }
-  const play = (name, { fade = 0.18, once = false, timeScale = 1 } = {}) => {
+  // While a one-shot action (hit reaction, death) runs, looping requests
+  // from the per-frame bot logic are ignored so they can't cut it short;
+  // the mixer 'finished' event lifts the gate and the next bot tick takes
+  // back control.
+  const play = (name, { fade = 0.18, once = false, timeScale = 1, force = false } = {}) => {
     const next = actions[name];
     if (!next) return false;
-    if (rigState.current === name) {
+    if (rigState.busy && !force) return false;
+    if (rigState.current === name && !once) {
       next.timeScale = timeScale;
       return true;
     }
@@ -254,12 +260,14 @@ export function makeRiggedSoldier(camo, { rifle = true, mask = true } = {}) {
     if (once) {
       next.setLoop(THREE.LoopOnce, 1);
       next.clampWhenFinished = true;
+      rigState.busy = true;
     }
     next.play();
-    if (prev) next.crossFadeFrom(prev, fade, false);
+    if (prev && prev !== next) next.crossFadeFrom(prev, fade, false);
     rigState.current = name;
     return true;
   };
+  mixer?.addEventListener('finished', () => { rigState.busy = false; });
 
   // rifle spanning the hands: grip at the right hand, barrel aimed at the
   // left hand (the idle clip holds a two-handed low-ready pose)
@@ -353,6 +361,32 @@ export function riggedDeath(soldier) {
   const r = soldier.userData.rig;
   if (!r?.play || !template?.deathNames.length) return 0;
   const name = template.deathNames[Math.floor(Math.random() * template.deathNames.length)];
-  if (!r.play(name, { fade: 0.1, once: true })) return 0;
+  if (!r.play(name, { fade: 0.1, once: true, force: true })) return 0;
   return template.clips[name].duration;
+}
+
+// Flinch from a non-lethal hit: one-shot reaction, after which the bot's
+// per-frame state (aim/walk/idle) resumes on its own.
+export function riggedHit(soldier) {
+  const r = soldier.userData.rig;
+  if (!r?.play || !template?.hitNames.length) return 0;
+  const name = template.hitNames[Math.floor(Math.random() * template.hitNames.length)];
+  if (!r.play(name, { fade: 0.08, once: true })) return 0;
+  return template.clips[name].duration;
+}
+
+// Combat stances: weapon shouldered (aim) and firing. Fall back to the
+// relaxed idle when the bake lacks these clips.
+export function riggedAim(soldier) {
+  const r = soldier.userData.rig;
+  if (!r) return;
+  if (r.actions?.aim) r.play('aim', { fade: 0.2 });
+  else riggedIdle(soldier);
+}
+
+export function riggedFire(soldier) {
+  const r = soldier.userData.rig;
+  if (!r) return;
+  if (r.actions?.fire) r.play('fire', { fade: 0.08 });
+  else riggedAim(soldier);
 }
