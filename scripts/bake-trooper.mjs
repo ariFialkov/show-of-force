@@ -228,31 +228,66 @@ for (let i = 0; i < simplified.length; i++) outIndex[i] = remap[simplified[i]];
 let minY = Infinity;
 for (let i = 1; i < outPos.length; i += 3) minY = Math.min(minY, outPos[i]);
 
-// -------------------------------------------------------------------- clip
+// -------------------------------------------------------------------- clips
 
-const clipSrc = obj.animations[0];
-const tracks = [];
-const trackSections = [];
-if (clipSrc) {
-  const hipsBone = boneOrder.find((b) => b.name.endsWith('Hips'));
+// All Mixamo clips share one unit quirk: the Hips.position track is authored
+// in different units than the skeleton bind pose, and it is FLOOR-anchored
+// (track y=0 is the ground) while the armature origin sits between hips and
+// feet (bind feet at minY < 0). Remap with an affine transform so the
+// clip's floor lands exactly on the skeleton's foot plane: scale so the
+// standing hip height matches the bind hip-above-feet distance, then shift
+// down by the foot depth. Anchoring to the bind hips alone would leave
+// low poses (a body lying on the ground) floating by |minY|.
+const hipsBone = boneOrder.find((b) => b.name.endsWith('Hips'));
+let hipScale = 1;
+if (obj.animations[0] && hipsBone) {
+  const hipTrack = obj.animations[0].tracks.find((t) => t.name.endsWith('Hips.position'));
+  if (hipTrack) {
+    let mean = 0; // the trooper's embedded idle stands straight -> standing hip height
+    for (let i = 1; i < hipTrack.values.length; i += 3) mean += hipTrack.values[i];
+    mean /= hipTrack.values.length / 3;
+    if (Math.abs(mean) > 1e-3) hipScale = (hipsBone.position.y - minY) / mean;
+  }
+}
+
+function bakeClip(name, clipSrc) {
+  const tracks = [];
+  const data = [];
   for (const tr of clipSrc.tracks) {
     const isQuat = tr.name.endsWith('.quaternion');
     const isHipsPos = tr.name.endsWith('Hips.position');
     if (!isQuat && !isHipsPos) continue;
-    let values = Float32Array.from(tr.values);
-    if (isHipsPos && hipsBone) {
-      // the position track is authored at a different unit scale than the
-      // bind pose — rescale so its mean matches the bind hip height
-      let mean = 0;
-      for (let i = 1; i < values.length; i += 3) mean += values[i];
-      mean /= values.length / 3;
-      if (Math.abs(mean) > 1e-3) {
-        const f = hipsBone.position.y / mean;
-        for (let i = 0; i < values.length; i++) values[i] *= f;
+    const boneName = tr.name.split('.')[0];
+    if (!boneIndexByName.has(boneName)) continue; // track for a bone we don't have
+    const values = Float32Array.from(tr.values);
+    if (isHipsPos) {
+      for (let i = 0; i < values.length; i += 3) {
+        values[i] *= hipScale;
+        values[i + 1] = values[i + 1] * hipScale + minY;
+        values[i + 2] *= hipScale;
       }
     }
     tracks.push({ name: tr.name, type: isQuat ? 'quaternion' : 'vector' });
-    trackSections.push({ times: Float32Array.from(tr.times), values });
+    data.push({ times: Float32Array.from(tr.times), values });
+  }
+  return { meta: { name, duration: clipSrc.duration, tracks }, data };
+}
+
+const clips = [];
+if (obj.animations[0]) clips.push(bakeClip('idle', obj.animations[0]));
+
+// additional animation-only FBX exports (same rig, "Without Skin")
+const ANIM_DIR = 'assets-src/anims';
+if (fs.existsSync(ANIM_DIR)) {
+  for (const f of fs.readdirSync(ANIM_DIR).sort()) {
+    if (!f.toLowerCase().endsWith('.fbx')) continue;
+    const name = f.replace(/\.fbx$/i, '').replace(/^rifle-/, '');
+    const abuf = fs.readFileSync(path.join(ANIM_DIR, f));
+    const aobj = new FBXLoader().parse(abuf.buffer.slice(abuf.byteOffset, abuf.byteOffset + abuf.byteLength), '');
+    if (!aobj.animations[0]) { console.warn(`  ${f}: no animation, skipped`); continue; }
+    const baked = bakeClip(name, aobj.animations[0]);
+    clips.push(baked);
+    console.log(`clip '${name}': ${baked.meta.duration.toFixed(2)}s, ${baked.meta.tracks.length} tracks`);
   }
 }
 
@@ -260,13 +295,13 @@ if (clipSrc) {
 
 const sections = [];
 const header = {
-  version: 1,
+  version: 2,
   vertexCount: used,
   triCount: outIndex.length / 3,
   indexType: outIndex.BYTES_PER_ELEMENT === 2 ? 'u16' : 'u32',
   headY, minY,
   bones,
-  clip: clipSrc ? { name: 'idle', duration: clipSrc.duration, tracks } : null,
+  clips: clips.map((c) => c.meta),
   sections: {}
 };
 let cursor = 0;
@@ -283,11 +318,13 @@ addSection('skinIndex', outSkinIdx);
 addSection('skinWeight', outSkinW);
 addSection('zone', outZone);
 addSection('index', outIndex);
-tracks.forEach((t, i) => {
-  addSection(`t${i}`, trackSections[i].times);
-  addSection(`v${i}`, trackSections[i].values);
-  t.timesSection = `t${i}`;
-  t.valuesSection = `v${i}`;
+clips.forEach((c, ci) => {
+  c.meta.tracks.forEach((t, ti) => {
+    addSection(`c${ci}t${ti}`, c.data[ti].times);
+    addSection(`c${ci}v${ti}`, c.data[ti].values);
+    t.timesSection = `c${ci}t${ti}`;
+    t.valuesSection = `c${ci}v${ti}`;
+  });
 });
 
 const headerBytes = new TextEncoder().encode(JSON.stringify(header));

@@ -45,16 +45,16 @@ export async function initRigged(url) {
     }));
     const boneInverses = header.bones.map((b) => new THREE.Matrix4().fromArray(b.inverse));
 
-    let clip = null;
-    if (header.clip) {
-      const tracks = header.clip.tracks.map((t) => {
+    const clips = {};
+    for (const c of header.clips ?? []) {
+      const tracks = c.tracks.map((t) => {
         const times = section(t.timesSection, Float32Array);
         const values = section(t.valuesSection, Float32Array);
         return t.type === 'quaternion'
           ? new THREE.QuaternionKeyframeTrack(t.name, times, values)
           : new THREE.VectorKeyframeTrack(t.name, times, values);
       });
-      clip = new THREE.AnimationClip(header.clip.name, header.clip.duration, tracks);
+      clips[c.name] = new THREE.AnimationClip(c.name, c.duration, tracks);
     }
 
     // bind pose is a T-pose, so derive height from the head bone, not the
@@ -69,7 +69,8 @@ export async function initRigged(url) {
       zones: section('zone', Uint8Array),
       index: header.indexType === 'u16' ? section('index', Uint16Array) : section('index', Uint32Array),
       boneDefs, boneInverses,
-      clip,
+      clips,
+      deathNames: Object.keys(clips).filter((n) => n.startsWith('death')),
       scale: TARGET_HEIGHT / height,
       minY: header.minY,
       headY: header.headY
@@ -122,8 +123,9 @@ function getPaletteGeometry(camo, mask) {
   geom.setAttribute('skinIndex', new THREE.BufferAttribute(template.skinIndex, 4));
   geom.setAttribute('skinWeight', new THREE.BufferAttribute(template.skinWeight, 4, true));
   geom.setAttribute('color', new THREE.BufferAttribute(colors, 3, true));
-  // generous bounds: animation moves limbs outside the bind-pose box
-  geom.boundingSphere = new THREE.Sphere(new THREE.Vector3(0, template.headY * 0.55, 0), template.headY * 1.4);
+  // generous bounds: animations move limbs outside the bind-pose box, and
+  // death clips translate the whole body a stride away from the origin
+  geom.boundingSphere = new THREE.Sphere(new THREE.Vector3(0, template.headY * 0.5, 0), template.headY * 2.2);
   geom.boundingBox = null;
   paletteGeomCache.set(key, geom);
   return geom;
@@ -224,15 +226,40 @@ export function makeRiggedSoldier(camo, { rifle = true, mask = true } = {}) {
   outer.add(hitbox);
   outer.add(blobShadow(0.5));
 
-  // idle clip via mixer — pose it once at t=0 so the rifle can be fitted
-  // to the actual hand positions, then desync the instance
+  // animation state machine: one action per baked clip, crossfaded on
+  // request. Start on idle, posed once at t=0 so the rifle can be fitted to
+  // the actual hand positions; the instance is desynced afterwards.
   let mixer = null;
-  if (template.clip) {
+  const actions = {};
+  const rigState = { current: null };
+  if (template.clips.idle) {
     mixer = new THREE.AnimationMixer(mesh);
-    const action = mixer.clipAction(template.clip);
-    action.play();
+    for (const [name, clip] of Object.entries(template.clips)) {
+      actions[name] = mixer.clipAction(clip);
+    }
+    actions.idle.play();
+    rigState.current = 'idle';
     mixer.update(0.0001);
   }
+  const play = (name, { fade = 0.18, once = false, timeScale = 1 } = {}) => {
+    const next = actions[name];
+    if (!next) return false;
+    if (rigState.current === name) {
+      next.timeScale = timeScale;
+      return true;
+    }
+    const prev = actions[rigState.current];
+    next.reset();
+    next.timeScale = timeScale;
+    if (once) {
+      next.setLoop(THREE.LoopOnce, 1);
+      next.clampWhenFinished = true;
+    }
+    next.play();
+    if (prev) next.crossFadeFrom(prev, fade, false);
+    rigState.current = name;
+    return true;
+  };
 
   // rifle spanning the hands: grip at the right hand, barrel aimed at the
   // left hand (the idle clip holds a two-handed low-ready pose)
@@ -275,7 +302,7 @@ export function makeRiggedSoldier(camo, { rifle = true, mask = true } = {}) {
     if (b) rest[k] = { q: b.quaternion.clone(), p: b.position.clone() };
   }
 
-  outer.userData.rig = { ...rig, rest, mixer };
+  outer.userData.rig = { ...rig, rest, mixer, actions, play, state: rigState };
   outer.userData.tick = (dt) => { mixer?.update(dt); };
   outer.userData.parts = {
     legL: rig.legL, legR: rig.legR, armL: rig.armL, armR: rig.armR,
@@ -285,15 +312,23 @@ export function makeRiggedSoldier(camo, { rifle = true, mask = true } = {}) {
   return outer;
 }
 
-// procedural gait layered ON TOP of the mixer idle (called after tick).
-// Only the legs are overridden — the idle clip owns arms/torso/hips, which
-// keeps the weapon-holding upper-body pose intact while walking.
+// Locomotion: real walk/run clips when the bake includes them (speed is the
+// caller's gait factor — roughly metres-per-second / 1.9), else a procedural
+// leg swing layered on the idle clip as fallback.
 const qSwing = new THREE.Quaternion();
 const X_AXIS = new THREE.Vector3(1, 0, 0);
 
 export function riggedWalk(soldier, t, speed = 1) {
   const r = soldier.userData.rig;
   if (!r) return;
+  if (r.actions?.walk) {
+    if (speed >= 1.4 && r.actions.run) {
+      r.play('run', { fade: 0.16, timeScale: Math.min(1.5, 0.75 + speed * 0.15) });
+    } else {
+      r.play('walk', { fade: 0.22, timeScale: Math.max(0.6, Math.min(1.6, 0.55 + speed * 0.55)) });
+    }
+    return;
+  }
   const ph = t * 7 * speed;
   const s = Math.sin(ph);
   const swing = (b, restQ, amt) => {
@@ -307,6 +342,17 @@ export function riggedWalk(soldier, t, speed = 1) {
 }
 
 export function riggedIdle(soldier) {
-  // the mixer's idle clip owns the pose; just clear the walk lean
+  const r = soldier.userData.rig;
   soldier.rotation.x = 0;
+  r?.play?.('idle', { fade: 0.25 });
+}
+
+// Play a random baked death clip. Returns its duration, or 0 when none are
+// baked (the caller then falls back to the procedural collapse).
+export function riggedDeath(soldier) {
+  const r = soldier.userData.rig;
+  if (!r?.play || !template?.deathNames.length) return 0;
+  const name = template.deathNames[Math.floor(Math.random() * template.deathNames.length)];
+  if (!r.play(name, { fade: 0.1, once: true })) return 0;
+  return template.clips[name].duration;
 }

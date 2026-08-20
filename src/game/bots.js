@@ -6,7 +6,7 @@
 // guarantee every active enemy dies eventually.
 
 import * as THREE from 'three';
-import { makeSoldier, animateWalk, poseIdle } from './models.js';
+import { makeSoldier, animateWalk, poseIdle, startDeath } from './models.js';
 import { sound } from './effects.js';
 
 // reddish insurgent fatigues with desaturated gear so the vest/helmet read
@@ -63,6 +63,7 @@ export class EnemyBot {
     if (this.hp <= 0) {
       this.state = 'dying';
       this.deathT = 0;
+      this.deathClipDur = startDeath(this.group); // 0 -> procedural collapse
       return true;
     }
     return false;
@@ -74,6 +75,15 @@ export class EnemyBot {
 
     if (this.state === 'dying') {
       this.deathT += dt;
+      if (this.deathClipDur > 0) {
+        // baked death clip drives the fall; hold the final frame briefly
+        this.group.userData.tick?.(dt);
+        if (this.deathT > this.deathClipDur + 0.8) {
+          this.group.visible = false;
+          this.state = 'dead';
+        }
+        return;
+      }
       const t = Math.min(1, this.deathT / 0.5);
       this.group.rotation.x = -t * Math.PI / 2;
       this.group.position.y = this.baseY - t * 0.15;
@@ -237,6 +247,7 @@ export class Comrade {
     const dist = tmpV.length();
     const holdForFight = target !== null && dist < 7;
     let moving = false;
+    let gait = 1;
     if (!holdForFight && dist > 0.22) {
       const speed = THREE.MathUtils.clamp(1.6 + dist * 1.7, 0, 6.8);
       const step = Math.min(dist, speed * dt);
@@ -244,6 +255,7 @@ export class Comrade {
       this.smooth.addScaledVector(tmpV, step);
       this.group.rotation.y = Math.atan2(tmpV.x, tmpV.z);
       moving = step > dt * 0.7;
+      gait = speed / 1.9; // walk near formation, break into a run to catch up
     }
     this.group.position.copy(this.smooth);
 
@@ -270,7 +282,7 @@ export class Comrade {
       }
     } else if (moving) {
       this.walkT += dt * 1.4;
-      animateWalk(this.group, this.walkT, 1);
+      animateWalk(this.group, this.walkT, gait);
     } else {
       this.walkT += dt * 0.25;
       poseIdle(this.group, this.walkT * 4);

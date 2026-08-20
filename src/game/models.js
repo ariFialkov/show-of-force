@@ -2,7 +2,7 @@
 // Everything is built from primitives so the game ships with zero assets.
 
 import * as THREE from 'three';
-import { riggedReady, makeRiggedSoldier, riggedWalk, riggedIdle } from './rigged.js';
+import { riggedReady, makeRiggedSoldier, riggedWalk, riggedIdle, riggedDeath } from './rigged.js';
 
 const mat = (color, opts = {}) => new THREE.MeshLambertMaterial({ color, ...opts });
 
@@ -537,6 +537,13 @@ export function animateWalk(soldier, t, speed = 1) {
   p.torso.position.y = (p.torsoY ?? 0.82) + Math.abs(Math.cos(ph)) * 0.022;
   soldier.rotation.x = 0.03 * Math.min(1, speed);
   if (p.rifle) p.rifle.rotation.x = (p.rifleRotX ?? -0.06) + Math.sin(ph * 2) * 0.012;
+}
+
+// Start a death animation. Returns the clip duration, or 0 when the model
+// has no baked death clips (caller falls back to the procedural collapse).
+export function startDeath(soldier) {
+  if (soldier.userData.rig) return riggedDeath(soldier);
+  return 0;
 }
 
 export function poseIdle(soldier, t = 0) {
