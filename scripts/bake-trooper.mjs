@@ -78,22 +78,38 @@ const headY = headBone ? new THREE.Vector3().setFromMatrixPosition(headBone.matr
 
 // ------------------------------------------------------------------- merge
 
-const ZONE = { CLOTH: 0, CLOTH_D: 1, VEST: 2, HELMET: 3, SKIN: 4, GLOVE: 5, BOOT: 6 };
+const ZONE = { KIT: 0, KIT_D: 1, WEB: 2, HELMET: 3, SKIN: 4, HAND: 5, BOOT: 6, GEAR: 7 };
 function zoneFor(boneName, y) {
   const n = boneName.replace('mixamorig', '');
-  if (/Hand|Thumb|Index|Middle|Ring|Pinky/.test(n)) return ZONE.GLOVE;
+  if (/Hand|Thumb|Index|Middle|Ring|Pinky/.test(n)) return ZONE.HAND;
   if (/Foot|Toe/.test(n)) return ZONE.BOOT;
-  if (/ForeArm/.test(n)) return ZONE.CLOTH_D;
-  if (/Shoulder/.test(n)) return ZONE.VEST;
-  if (/Arm/.test(n)) return ZONE.CLOTH;
+  if (/ForeArm/.test(n)) return ZONE.KIT_D;
+  if (/Shoulder/.test(n)) return ZONE.WEB;
+  if (/Arm/.test(n)) return ZONE.KIT;
   if (/Head/.test(n)) return y > headY + 1.1 ? ZONE.HELMET : ZONE.SKIN;
   if (/Neck/.test(n)) return ZONE.SKIN;
-  if (/Spine1|Spine2/.test(n)) return ZONE.VEST;
-  if (/Spine|Hips/.test(n)) return ZONE.CLOTH;
-  if (/UpLeg/.test(n)) return ZONE.CLOTH;
-  if (/Leg/.test(n)) return ZONE.CLOTH_D;
-  return ZONE.CLOTH;
+  if (/Spine1|Spine2/.test(n)) return ZONE.WEB;
+  if (/Spine|Hips/.test(n)) return ZONE.KIT;
+  if (/UpLeg/.test(n)) return ZONE.KIT;
+  if (/Leg/.test(n)) return ZONE.KIT_D;
+  return ZONE.KIT;
 }
+
+// Per-part zone overrides (part order in the FBX is stable; names are junk
+// like "Cube018" but each garment/limb/device is its own part). Mapped by
+// inspecting T-pose bounding boxes: torso/limb armor -> KIT, the helmet
+// shell -> HELMET, hands + fingers + neck/lower face -> bare SKIN,
+// goggles/antenna/small devices -> GEAR (black), belt ring -> webbing.
+// -1 = fall through to the per-bone zoneFor.
+const PART_ZONE = new Array(meshes.length).fill(-1);
+const setZones = (zone, idxs) => { for (const i of idxs) PART_ZONE[i] = zone; };
+setZones(ZONE.BOOT, [0, 16, 17, 18, 19, 20, 21, 25, 26, 27, 28, 29, 30]);
+setZones(ZONE.SKIN, [1, 36, 38, 39, 40, 41, 42, 48, 49, 50, 51, 52, 53]); // neck/face + hands
+setZones(ZONE.GEAR, [4, 9, 11, 31]); // helmet devices, goggles, antenna
+setZones(ZONE.WEB, [8]); // belt pouch ring
+setZones(ZONE.HELMET, [3]); // helmet shell
+setZones(ZONE.KIT, [5, 6, 7, 12, 13, 14, 15, 22, 23, 24, 32, 33, 34, 35, 37, 43, 44, 45, 46, 47]);
+// 2 and 10 (head + hood) stay bone/height-driven for the helmet/face split
 
 let total = 0;
 for (const m of meshes) total += m.geometry.attributes.position.count;
@@ -104,13 +120,14 @@ const skinWeight = new Float32Array(total * 4);
 const zone = new Float32Array(total);
 
 let offset = 0;
-for (const m of meshes) {
+meshes.forEach((m, pi) => {
   const g = m.geometry;
   const n = g.attributes.position.count;
   position.set(g.attributes.position.array, offset * 3);
   normal.set(g.attributes.normal.array, offset * 3);
   const si = g.attributes.skinIndex, sw = g.attributes.skinWeight;
   const localToCanon = m.skeleton.bones.map((b) => boneIndexByName.get(b.name) ?? 0);
+  const partZone = PART_ZONE[pi];
   for (let v = 0; v < n; v++) {
     let domW = -1, domBone = 0;
     for (let k = 0; k < 4; k++) {
@@ -120,10 +137,12 @@ for (const m of meshes) {
       skinWeight[(offset + v) * 4 + k] = w;
       if (w > domW) { domW = w; domBone = canon; }
     }
-    zone[offset + v] = zoneFor(boneOrder[domBone].name, g.attributes.position.getY(v));
+    zone[offset + v] = partZone >= 0
+      ? partZone
+      : zoneFor(boneOrder[domBone].name, g.attributes.position.getY(v));
   }
   offset += n;
-}
+});
 console.log(`merged: ${meshes.length} parts, ${total / 3} tris, ${bones.length} bones`);
 
 // ------------------------------------------------------- weld + simplify

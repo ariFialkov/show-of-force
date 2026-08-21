@@ -110,17 +110,20 @@ function getPaletteGeometry(camo, mask, hideHelmet = false) {
   if (paletteGeomCache.has(key)) return paletteGeomCache.get(key);
 
   const dark = (hex, f) => new THREE.Color(hex).multiplyScalar(f);
+  // One kit color across torso/arms/legs/helmet shell (soldierly, not
+  // color-blocked), bare skin on hands/face, neutral webbing + boots, and
+  // near-black for hard devices (goggles, antenna, belt kit). The lift is
+  // only for dark fabric — skin tones are bright enough as authored.
   const zoneColors = [
-    new THREE.Color(camo.cloth),
-    dark(camo.cloth, 0.82),
-    new THREE.Color(camo.vest),
-    new THREE.Color(camo.helmet),
-    // the head mesh wears goggles + face cover — bare-skin paint reads
-    // wrong on it, so soldiers get a dark balaclava; civilians keep skin
-    mask ? dark(camo.cloth, 0.6) : new THREE.Color(camo.skin),
-    new THREE.Color(0x3a3c33),
-    new THREE.Color(0x35362e)
-  ].map(lift);
+    lift(new THREE.Color(camo.cloth)),                 // KIT
+    lift(dark(camo.cloth, 0.93)),                      // KIT shaded (forearms, shins)
+    lift(new THREE.Color(0x393d39)),                   // webbing / belt straps
+    lift(mask ? dark(camo.cloth, 0.97) : new THREE.Color(camo.helmet)), // helmet shell = kit / civilian hair
+    new THREE.Color(camo.skin),                        // face + neck
+    new THREE.Color(camo.skin).multiplyScalar(0.96),   // hands
+    new THREE.Color(0x3a362e),                         // boots
+    new THREE.Color(0x2c2e33)                          // devices: goggles, antenna, pouch kit
+  ];
   const n = template.zones.length;
   // RGBA: alpha 0 + material alphaTest discards the built-in modeled
   // helmet/antenna when a real headgear asset replaces it
