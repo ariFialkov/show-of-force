@@ -133,17 +133,21 @@ export class EnemyBot {
       animateWalk(this.group, this.walkT, gait * this.temper.gait);
       return false;
     }
-    for (const off of [0, 0.55, -0.55, 1.1, -1.1, 1.75, -1.75]) {
-      const a = base + off;
-      const sx = Math.sin(a), sz = Math.cos(a);
-      // look a stride ahead so we steer before touching the wall
-      if ((ctx.isWalkable?.(p.x + sx * (s + 0.55), p.z + sz * (s + 0.55), 0.55) ?? true) &&
-          (ctx.isWalkable?.(p.x + sx * s, p.z + sz * s, 0.55) ?? true)) {
-        p.x += sx * s;
-        p.z += sz * s;
-        slewYaw(this.group, a, dt, 8);
-        animateWalk(this.group, this.walkT, gait * this.temper.gait);
-        return false;
+    // prefer generous wall clearance, but relax it rather than freeze —
+    // doorways and narrow corridors can't fit the comfortable margin
+    for (const margin of [0.55, 0.35, 0.2]) {
+      for (const off of [0, 0.55, -0.55, 1.1, -1.1, 1.75, -1.75]) {
+        const a = base + off;
+        const sx = Math.sin(a), sz = Math.cos(a);
+        // look a stride ahead so we steer before touching the wall
+        if ((ctx.isWalkable?.(p.x + sx * (s + 0.55), p.z + sz * (s + 0.55), margin) ?? true) &&
+            (ctx.isWalkable?.(p.x + sx * s, p.z + sz * s, margin) ?? true)) {
+          p.x += sx * s;
+          p.z += sz * s;
+          slewYaw(this.group, a, dt, 8);
+          animateWalk(this.group, this.walkT, gait * this.temper.gait);
+          return false;
+        }
       }
     }
     return true; // boxed in — let the caller pick a new plan
@@ -598,7 +602,6 @@ export class Comrade {
       tmpV.normalize();
       // steer around walls like the enemies do; the walk anim only plays
       // when we actually advance (no more running in place when blocked)
-      const walk = (x, z) => ctx.isWalkable?.(x, z, 0.45) ?? true;
       const base = Math.atan2(tmpV.x, tmpV.z);
       const ahead = dist > 1.5 ? step + 0.5 : step;
       let advanced = false;
@@ -610,16 +613,22 @@ export class Comrade {
         slewYaw(this.group, base, dt, 9);
         advanced = true;
       } else {
-        for (const off of [0, 0.6, -0.6, 1.2, -1.2]) {
-          const a = base + off;
-          const sx = Math.sin(a), sz = Math.cos(a);
-          if (walk(this.smooth.x + sx * step, this.smooth.z + sz * step) &&
-              walk(this.smooth.x + sx * ahead, this.smooth.z + sz * ahead)) {
-            this.smooth.x += sx * step;
-            this.smooth.z += sz * step;
-            slewYaw(this.group, a, dt, 9);
-            advanced = true;
-            break;
+        // prefer generous wall clearance, but relax it rather than freeze:
+        // doorways and narrow corridors can't fit the comfortable margin
+        outer:
+        for (const margin of [0.45, 0.3, 0.18]) {
+          const walk = (x, z) => ctx.isWalkable?.(x, z, margin) ?? true;
+          for (const off of [0, 0.6, -0.6, 1.2, -1.2]) {
+            const a = base + off;
+            const sx = Math.sin(a), sz = Math.cos(a);
+            if (walk(this.smooth.x + sx * step, this.smooth.z + sz * step) &&
+                walk(this.smooth.x + sx * ahead, this.smooth.z + sz * ahead)) {
+              this.smooth.x += sx * step;
+              this.smooth.z += sz * step;
+              slewYaw(this.group, a, dt, 9);
+              advanced = true;
+              break outer;
+            }
           }
         }
       }
@@ -698,7 +707,7 @@ export class Comrade {
       this.walkT += dt * 0.25;
       slewYaw(this.group, ctx.stackYaw ?? playerYaw + Math.PI, dt, 6);
       poseCombat(this.group, this.walkT);
-    } else if (!civ && (this.posted || (ctx.haltT ?? 0) > 1.1 + this.temper.delay)) {
+    } else if (!civ && dist < 3.5 && (this.posted || (ctx.haltT ?? 0) > 1.1 + this.temper.delay)) {
       // sticky: once posted, stay posted through the commander's small
       // adjustments — only real movement or contact breaks the perimeter
       // long halt: settle into a perimeter — each soldier owns a watch
