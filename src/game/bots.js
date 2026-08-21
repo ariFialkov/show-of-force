@@ -582,14 +582,25 @@ export class Comrade {
       const speed = THREE.MathUtils.clamp(1.6 + dist * 1.7, 0, 6.8) * this.temper.gait;
       const step = Math.min(dist, speed * dt);
       tmpV.normalize();
-      // wall-guarded advance: full step, else slide along one axis
-      const nx = this.smooth.x + tmpV.x * step, nz = this.smooth.z + tmpV.z * step;
+      // steer around walls like the enemies do; the walk anim only plays
+      // when we actually advance (no more running in place when blocked)
       const walk = (x, z) => ctx.isWalkable?.(x, z, 0.35) ?? true;
-      if (walk(nx, nz)) this.smooth.set(nx, 0, nz);
-      else if (walk(nx, this.smooth.z)) this.smooth.x = nx;
-      else if (walk(this.smooth.x, nz)) this.smooth.z = nz;
-      slewYaw(this.group, Math.atan2(tmpV.x, tmpV.z), dt, 9);
-      moving = step > dt * 0.7;
+      const base = Math.atan2(tmpV.x, tmpV.z);
+      const ahead = dist > 1.5 ? step + 0.5 : step;
+      let advanced = false;
+      for (const off of [0, 0.6, -0.6, 1.2, -1.2]) {
+        const a = base + off;
+        const sx = Math.sin(a), sz = Math.cos(a);
+        if (walk(this.smooth.x + sx * step, this.smooth.z + sz * step) &&
+            walk(this.smooth.x + sx * ahead, this.smooth.z + sz * ahead)) {
+          this.smooth.x += sx * step;
+          this.smooth.z += sz * step;
+          slewYaw(this.group, a, dt, 9);
+          advanced = true;
+          break;
+        }
+      }
+      moving = advanced && step > dt * 0.7;
       gait = speed / 1.9; // walk near formation, break into a run to catch up
     }
     this.group.position.copy(this.smooth);

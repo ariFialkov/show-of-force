@@ -880,6 +880,48 @@ export class Game {
   losClear(from, to) { return this.gridCast(from, to) === null; }
   clipPoint(from, to) { return this.gridCast(from, to)?.point ?? to; }
 
+  // Gentle positional relaxation between soldier bodies: overlapping pairs
+  // slide apart a little each frame instead of sharing space. Purely
+  // corrective (no velocities), so it converges without jitter. The player
+  // acts as an immovable body so nobody crowds the camera.
+  separateBots() {
+    const bodies = [];
+    for (const c of this.comrades) bodies.push({ p: c.group.position, s: c.smooth });
+    if (this.npc) bodies.push({ p: this.npc.group.position, s: this.npc.smooth });
+    for (const e of this.enemies) {
+      if (e.alive && !e.elevated) bodies.push({ p: e.group.position });
+    }
+    const walk = this.botCtxExtras().isWalkable;
+    const R = 0.62; // body diameter-ish
+    const apply = (b, dx, dz) => {
+      const nx = b.p.x + dx, nz = b.p.z + dz;
+      if (!walk(nx, nz, 0.3)) return;
+      b.p.x = nx; b.p.z = nz;
+      if (b.s) { b.s.x = nx; b.s.z = nz; }
+    };
+    for (let i = 0; i < bodies.length; i++) {
+      for (let j = i + 1; j < bodies.length; j++) {
+        const a = bodies[i].p, b = bodies[j].p;
+        let dx = b.x - a.x, dz = b.z - a.z;
+        const d2 = dx * dx + dz * dz;
+        if (d2 >= R * R || d2 < 1e-6) continue;
+        const d = Math.sqrt(d2);
+        const push = (R - d) * 0.2;
+        dx /= d; dz /= d;
+        apply(bodies[i], -dx * push, -dz * push);
+        apply(bodies[j], dx * push, dz * push);
+      }
+      // keep clear of the commander
+      const a = bodies[i].p;
+      let dx = a.x - this.player.pos.x, dz = a.z - this.player.pos.z;
+      const d2 = dx * dx + dz * dz;
+      if (d2 < R * R && d2 > 1e-6) {
+        const d = Math.sqrt(d2);
+        apply(bodies[i], (dx / d) * (R - d) * 0.3, (dz / d) * (R - d) * 0.3);
+      }
+    }
+  }
+
   botCtxExtras() {
     return {
       los: (a, b) => this.losClear(a, b),
@@ -1884,6 +1926,7 @@ export class Game {
           });
         }
         this.updateComrades(dt, true);
+        this.separateBots();
 
         // viewmodel kick recovery + look-lag sway
         if (this.viewmodel) {
@@ -1977,19 +2020,55 @@ export class Game {
       } else if (gp.mid) {
         best = { x: gp.mid.x, z: gp.mid.z, dir: { x: gp.h.x, z: gp.h.z } };
       }
+      // hysteresis: only re-target another doorway once it is clearly closer,
+      // and drop the role assignment so sides re-match to the new axis
       if (best) {
+        const cur = gp.stackGate;
+        if (!cur || (cur.x - best.x) ** 2 + (cur.z - best.z) ** 2 > 0.1) {
+          const curD = cur ? (pp.x - cur.x) ** 2 + (pp.z - cur.z) ** 2 : Infinity;
+          if (bd < curD - 16) {
+            gp.stackGate = best;
+            gp.stackAssign = null;
+          } else if (!cur) {
+            gp.stackGate = best;
+          }
+        }
+      }
+      const gate = gp.stackGate;
+      if (gate) {
         const walk = this.botCtxExtras().isWalkable;
-        const yaw = Math.atan2(best.dir.x, best.dir.z);
-        const bx = best.x - best.dir.x * 1.9, bz = best.z - best.dir.z * 1.9;
+        const yaw = Math.atan2(gate.dir.x, gate.dir.z);
+        const bx = gate.x - gate.dir.x * 1.9, bz = gate.z - gate.dir.z * 1.9;
+        const px = gate.dir.z, pz = -gate.dir.x; // door axis (lateral)
         const mk = (side) => {
-          const sx = bx + best.dir.z * 1.5 * side, sz = bz - best.dir.x * 1.5 * side;
+          const sx = bx + px * 1.5 * side, sz = bz + pz * 1.5 * side;
           return walk(sx, sz, 0.35) ? { pos: new THREE.Vector3(sx, 0, sz), yaw } : null;
         };
-        const stacks = [mk(1), mk(-1)].filter(Boolean);
-        const order = this.comrades.map((c, i) => ({ i, d: c.group.position.distanceToSquared(this.player.pos) }))
-          .sort((a, b) => a.d - b.d);
-        for (let k = 0; k < stacks.length && k < order.length; k++) {
-          stackByComrade.set(order[k].i, stacks[k]);
+        // assign ONCE per gate: the two comrades nearest the door take the
+        // side of the door axis they are already on, so their approach
+        // paths never cross (crossing caused a per-frame role flip-flop
+        // that read as the pair vibrating against each other)
+        if (!gp.stackAssign) {
+          const order = this.comrades.map((c, i) => ({
+            i,
+            d: (c.group.position.x - gate.x) ** 2 + (c.group.position.z - gate.z) ** 2
+          })).sort((a, b) => a.d - b.d).filter((o) => o.d < 256).slice(0, 2);
+          const sideOf = (i) => {
+            const c = this.comrades[i].group.position;
+            return Math.sign((c.x - bx) * px + (c.z - bz) * pz) || 1;
+          };
+          if (order.length) {
+            const a = order[0].i, b = order[1]?.i;
+            const sa = sideOf(a);
+            gp.stackAssign = [[a, sa]];
+            if (b !== undefined) gp.stackAssign.push([b, -sa]);
+          }
+        }
+        if (gp.stackAssign) {
+          for (const [i, side] of gp.stackAssign) {
+            const st = mk(side);
+            if (st) stackByComrade.set(i, st);
+          }
         }
       }
     }
