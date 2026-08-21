@@ -231,6 +231,32 @@ export function makeCivilian(shirtColor = 0x7a6a4a) {
 // the viewmodel convention). Real-size weapons overwhelm the frame at arm
 // distance, so each gets a first-person presentation scale. Null when the
 // bake lacks the weapon.
+// First-person viewmodel built from the SAME rigged trooper the squad and
+// enemies use, masked down to the arms (everything else is discarded by
+// vertex alpha). The body sits so the camera is at its eyes, so the baked
+// aim/fire/reload clips drive the player's hands exactly as they drive a
+// bot's — no separate viewmodel rig to keep in sync.
+const VM_EYE = 1.5;
+const VM_BODY_SCALE = 0.88;   // slightly reduced: real-scale hands at 30cm read as giant
+const VM_DROP = 0.15;         // camera rides above the shoulders so the weapon sits low
+const VM_FWD = 0.16;          // body pushed forward so hands are at arm's length
+
+export function makeRiggedViewmodel(camo, weapon, headgear = null) {
+  if (!riggedReady()) return null;
+  const body = makeRiggedSoldier(camo, { armsOnly: true, weapon, headgear: null, mask: true });
+  if (!body) return null;
+  const wrap = new THREE.Group();
+  // face the camera's forward (-Z); models face +Z
+  body.rotation.y = Math.PI;
+  body.scale.setScalar(VM_BODY_SCALE);
+  // camera just above and behind the eyes, looking over the weapon
+  body.position.set(0, -(VM_EYE * VM_BODY_SCALE) - VM_DROP, -VM_FWD);
+  wrap.add(body);
+  wrap.userData.rig = body.userData.rig;
+  wrap.userData.tick = body.userData.tick;
+  return wrap;
+}
+
 const VM_SCALE = { rifle: 0.72, shotgun: 0.62, harpoon: 0.58, flashgl: 0.85, rpg: 0.45, knife: 1.0 };
 // hand anchors in wrapper space (probed against the rendered weapons):
 // g = trigger hand at the pistol grip, s = support hand under the forend

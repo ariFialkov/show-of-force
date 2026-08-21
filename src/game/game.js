@@ -14,7 +14,7 @@ import { RISK_FACTORS } from '../config.js';
 import { buildWorld } from './world.js';
 import { Effects, sound } from './effects.js';
 import { EnemyBot, Comrade } from './bots.js';
-import { makeVehicle, makeCar, makeCivilian, makeObjectiveProp, makeGate, makeBackupViewmodel, makeWeaponViewmodel, animateWalk, poseIdle, poseSit } from './models.js';
+import { makeVehicle, makeCar, makeCivilian, makeObjectiveProp, makeGate, makeBackupViewmodel, makeWeaponViewmodel, makeRiggedViewmodel, animateWalk, poseIdle, poseSit } from './models.js';
 
 // Squad backup weapons (hold FIRE on mobile / N on desktop to switch)
 const BACKUPS = {
@@ -305,11 +305,24 @@ export class Game {
     }
   }
 
+  // Drive the rigged viewmodel arms from the player's weapon state, using
+  // the same baked clips the squad and enemies play.
+  updateViewmodelPose(dt) {
+    const vm = this.viewmodel;
+    const rig = vm?.userData?.rig;
+    if (!rig?.play) return;
+    vm.userData.tick?.(dt);
+    this.vmFireT = Math.max(0, (this.vmFireT ?? 0) - dt);
+    if (this.player.reload > 0) rig.play('reload', { fade: 0.12 });
+    else if (this.vmFireT > 0) rig.play('fire', { fade: 0.05 });
+    else rig.play('aim', { fade: 0.16 });
+  }
+
   buildViewmodel() {
     if (this.viewmodel) this.camera.remove(this.viewmodel);
     if (this.viewmodelBackup) this.camera.remove(this.viewmodelBackup);
     const camo = this.mission.team.camo;
-    let g = makeWeaponViewmodel('rifle', camo);
+    let g = makeRiggedViewmodel(camo, 'rifle') ?? makeWeaponViewmodel('rifle', camo);
     if (!g) {
       // procedural fallback when the baked weapon set is unavailable
       g = new THREE.Group();
@@ -323,13 +336,21 @@ export class Game {
       hands.position.set(0, -0.06, -0.12);
       g.add(body, grip, sight, hands);
     }
-    g.position.set(0.24, -0.22, -0.5);
+    const rigged = !!g.userData.rig;
+    // the rigged body already holds the weapon in a natural pose, so it
+    // only needs a small offset; the procedural fallback is placed by hand
+    this.vmBase = rigged
+      ? new THREE.Vector3(0.02, -0.02, 0)
+      : new THREE.Vector3(0.24, -0.22, -0.5);
+    g.position.copy(this.vmBase);
     this.viewmodel = g;
     this.viewmodelPrimary = g;
     this.camera.add(g);
 
-    const backup = makeBackupViewmodel(this.mission.team.backup, camo);
-    backup.position.set(0.24, -0.22, -0.5);
+    const backupWeapon = { harpoon: 'harpoon', knife: 'knife', flashgl: 'flashgl', shotgun: 'shotgun', rpg: 'rpg' }[this.mission.team.backup];
+    const backup = (rigged && makeRiggedViewmodel(camo, backupWeapon))
+      ?? makeBackupViewmodel(this.mission.team.backup, camo);
+    backup.position.copy(this.vmBase);
     backup.visible = false;
     this.viewmodelBackup = backup;
     this.camera.add(backup);
@@ -1025,7 +1046,8 @@ export class Game {
 
     sound.shot();
     this.shake = Math.min(this.shake + 0.12, 0.5);
-    if (this.viewmodel) this.viewmodel.position.z = -0.4; // kick, eased back in update
+    if (this.viewmodel) this.viewmodel.position.z = (this.vmBase?.z ?? -0.5) + 0.1; // kick, eased back in update
+    this.vmFireT = 0.18; // hold the firing pose on the rigged arms
 
     // raycast from camera center; the round stops at the FIRST thing it
     // meets — wall, destructible, or enemy
@@ -1933,6 +1955,9 @@ export class Game {
         this.updateComrades(dt, true);
         this.separateBots();
 
+        // rigged first-person arms run the same clips the bots use
+        this.updateViewmodelPose(dt);
+
         // viewmodel kick recovery + look-lag sway
         if (this.viewmodel) {
           // grenade toss gesture: rifle dips aside for a beat and returns
@@ -1941,9 +1966,10 @@ export class Game {
             this.throwAnimT -= dt;
             toss = Math.sin(Math.PI * (1 - Math.max(0, this.throwAnimT) / 0.55));
           }
-          this.viewmodel.position.z += (-0.5 - this.viewmodel.position.z) * Math.min(1, dt * 14);
-          const targetX = (this.controls.scoped ? 0.0 : 0.24) + toss * 0.12;
-          const targetY = (this.controls.scoped ? -0.14 : -0.22) - toss * 0.2 + Math.sin(this.player.bob) * 0.006;
+          const base = this.vmBase ?? new THREE.Vector3(0.24, -0.22, -0.5);
+          this.viewmodel.position.z += (base.z - this.viewmodel.position.z) * Math.min(1, dt * 14);
+          const targetX = (this.controls.scoped ? base.x - 0.24 : base.x) + toss * 0.12;
+          const targetY = (this.controls.scoped ? base.y + 0.08 : base.y) - toss * 0.2 + Math.sin(this.player.bob) * 0.006;
           this.viewmodel.position.x += (targetX - this.viewmodel.position.x) * Math.min(1, dt * 10);
           this.viewmodel.position.y += (targetY - this.viewmodel.position.y) * Math.min(1, dt * 10);
           const dyaw = this.controls.yaw - (this.lastYaw ?? this.controls.yaw);

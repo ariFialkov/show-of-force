@@ -107,8 +107,28 @@ function lift(c) {
   return c;
 }
 
-function getPaletteGeometry(camo, mask, hideHelmet = false) {
-  const key = paletteKey(camo, mask) + (hideHelmet ? ':hh' : '');
+// Vertices whose dominant bone belongs to an arm — used to mask the body
+// down to just the limbs the first-person camera would actually see.
+let armMaskCache = null;
+function armMask() {
+  if (armMaskCache) return armMaskCache;
+  const isArm = template.boneDefs.map((b) =>
+    /Arm|ForeArm|Hand|Thumb|Index|Middle|Ring|Pinky/.test(b.name));
+  const n = template.zones.length;
+  const m = new Uint8Array(n);
+  for (let v = 0; v < n; v++) {
+    let maxK = 0;
+    for (let k = 1; k < 4; k++) {
+      if (template.skinWeight[v * 4 + k] > template.skinWeight[v * 4 + maxK]) maxK = k;
+    }
+    m[v] = isArm[template.skinIndex[v * 4 + maxK]] ? 1 : 0;
+  }
+  armMaskCache = m;
+  return m;
+}
+
+function getPaletteGeometry(camo, mask, hideHelmet = false, armsOnly = false) {
+  const key = paletteKey(camo, mask) + (hideHelmet ? ':hh' : '') + (armsOnly ? ':ao' : '');
   if (paletteGeomCache.has(key)) return paletteGeomCache.get(key);
 
   const dark = (hex, f) => new THREE.Color(hex).multiplyScalar(f);
@@ -127,8 +147,10 @@ function getPaletteGeometry(camo, mask, hideHelmet = false) {
     new THREE.Color(0x2c2e33)                          // devices: goggles, antenna, pouch kit
   ];
   const n = template.zones.length;
-  // RGBA: alpha 0 + material alphaTest discards the built-in modeled
-  // helmet/antenna when a real headgear asset replaces it
+  // RGBA: alpha 0 + material alphaTest discards geometry we don't want —
+  // the modeled helmet under a full-head gear asset, or everything but the
+  // arms for the first-person viewmodel
+  const arms = armsOnly ? armMask() : null;
   const colors = new Uint8Array(n * 4);
   for (let i = 0; i < n; i++) {
     const zone = template.zones[i];
@@ -138,11 +160,24 @@ function getPaletteGeometry(camo, mask, hideHelmet = false) {
     colors[i * 4] = Math.min(255, c.r * 255 * g);
     colors[i * 4 + 1] = Math.min(255, c.g * 255 * g);
     colors[i * 4 + 2] = Math.min(255, c.b * 255 * g);
-    colors[i * 4 + 3] = hideHelmet && zone === 3 ? 0 : 255;
+    const hidden = (hideHelmet && zone === 3) || (arms && !arms[i]);
+    colors[i * 4 + 3] = hidden ? 0 : 255;
   }
 
   const geom = new THREE.BufferGeometry();
-  geom.setIndex(new THREE.BufferAttribute(template.index, 1));
+  if (arms) {
+    // viewmodel: drop hidden triangles from the index so the GPU never
+    // transforms the ~90% of the body the camera can't see
+    const src = template.index;
+    const keep = [];
+    for (let t = 0; t < src.length; t += 3) {
+      if (arms[src[t]] && arms[src[t + 1]] && arms[src[t + 2]]) keep.push(src[t], src[t + 1], src[t + 2]);
+    }
+    const Ctor = template.position.length / 3 > 65535 ? Uint32Array : Uint16Array;
+    geom.setIndex(new THREE.BufferAttribute(Ctor.from(keep), 1));
+  } else {
+    geom.setIndex(new THREE.BufferAttribute(template.index, 1));
+  }
   geom.setAttribute('position', new THREE.BufferAttribute(template.position, 3));
   geom.setAttribute('normal', new THREE.BufferAttribute(template.normal, 3, true));
   geom.setAttribute('skinIndex', new THREE.BufferAttribute(template.skinIndex, 4));
@@ -296,7 +331,7 @@ function blobShadow(radius) {
 
 // Build one character. Returns a group with the same userData contract as
 // the procedural soldiers (parts, tick, rig flag).
-export function makeRiggedSoldier(camo, { rifle = true, mask = true, civilian = false, headgear = null } = {}) {
+export function makeRiggedSoldier(camo, { rifle = true, mask = true, civilian = false, headgear = null, armsOnly = false, weapon = 'rifle' } = {}) {
   const outer = new THREE.Group();
   outer.userData.civilian = civilian;
 
@@ -309,19 +344,22 @@ export function makeRiggedSoldier(camo, { rifle = true, mask = true, civilian = 
   const gearMeta = headgear ? template.gear[headgear] : null;
   const hideCrown = !!gearMeta?.replaceHead;
   const mesh = new THREE.SkinnedMesh(
-    getPaletteGeometry(camo, mask, hideCrown),
+    getPaletteGeometry(camo, mask, hideCrown, armsOnly),
     // subtle specular so helmets, vests and gear catch highlights and the
     // body shape reads even against a dark backdrop
     new THREE.MeshPhongMaterial({
       vertexColors: true, specular: 0x2e2e2e, shininess: 22,
-      alphaTest: hideCrown ? 0.5 : 0
+      alphaTest: hideCrown || armsOnly ? 0.5 : 0,
+      // viewmodel arms ride over the world so they never clip into cover
+      depthTest: !armsOnly
     })
   );
   mesh.add(boneRoot);
   mesh.bind(skeleton, new THREE.Matrix4());
   mesh.raycast = () => {}; // dense skin — raycasts hit the capsule hitbox instead
-  mesh.castShadow = !IS_TOUCH;
-  mesh.frustumCulled = true;
+  mesh.castShadow = !IS_TOUCH && !armsOnly;
+  mesh.frustumCulled = !armsOnly;
+  if (armsOnly) mesh.renderOrder = 500;
 
   const inner = new THREE.Group();
   inner.scale.setScalar(template.scale);
@@ -330,13 +368,15 @@ export function makeRiggedSoldier(camo, { rifle = true, mask = true, civilian = 
   outer.add(inner);
 
   // simple hitbox the weapon raycasts hit instead of the dense skin
-  const hitbox = new THREE.Mesh(
-    new THREE.CapsuleGeometry(0.42, 0.95, 2, 8),
-    new THREE.MeshBasicMaterial({ visible: false })
-  );
-  hitbox.position.y = 0.95;
-  outer.add(hitbox);
-  outer.add(blobShadow(0.5));
+  if (!armsOnly) {
+    const hitbox = new THREE.Mesh(
+      new THREE.CapsuleGeometry(0.42, 0.95, 2, 8),
+      new THREE.MeshBasicMaterial({ visible: false })
+    );
+    hitbox.position.y = 0.95;
+    outer.add(hitbox);
+    outer.add(blobShadow(0.5));
+  }
 
   // animation state machine: one action per baked clip, crossfaded on
   // request. Start on idle, posed once at t=0 so the rifle can be fitted to
@@ -395,11 +435,18 @@ export function makeRiggedSoldier(camo, { rifle = true, mask = true, civilian = 
     helper.updateMatrix();
     const local = helper.matrix.clone()
       .premultiply(new THREE.Matrix4().copy(handR.matrixWorld).invert());
-    const r = makeWeaponMesh('rifle', camo) ?? makeRifle();
+    const r = makeWeaponMesh(weapon, camo) ?? makeRifle();
     local.decompose(r.position, r.quaternion, r.scale);
     handR.add(r);
     r.translateZ(0.05 / template.scale); // grip into the palm
     r.translateY(0.05 / template.scale); // ride above the fists, clear of the chest
+    if (armsOnly) {
+      // the held weapon rides over the world with the arms
+      r.material = r.material.clone();
+      r.material.depthTest = false;
+      r.renderOrder = 501;
+      r.castShadow = false;
+    }
     muzzle.position.set(0, 0.01, r.userData.muzzleZ ?? 0.62);
     r.add(muzzle);
   } else {
