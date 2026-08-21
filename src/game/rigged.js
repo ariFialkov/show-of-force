@@ -457,7 +457,11 @@ export function makeRiggedSoldier(camo, { rifle = true, mask = true, civilian = 
       handR.matrixWorld.decompose(new THREE.Vector3(), handQ, new THREE.Vector3());
       const barrelWorld = new THREE.Vector3(0, 0, 1)
         .applyQuaternion(new THREE.Quaternion().copy(handQ).multiply(r.quaternion));
-      const fix = new THREE.Quaternion().setFromUnitVectors(barrelWorld, new THREE.Vector3(0, 0, 1));
+      // aim at the CHARACTER's forward, not world +Z: when this re-runs the
+      // viewmodel is parented under the camera, so a world-space target
+      // would peg the weapon to a fixed compass direction
+      const fwd = new THREE.Vector3(0, 0, 1).transformDirection(outer.matrixWorld).normalize();
+      const fix = new THREE.Quaternion().setFromUnitVectors(barrelWorld, fwd);
       r.quaternion.premultiply(new THREE.Quaternion().copy(handQ).invert().multiply(fix).multiply(handQ));
     };
     alignWeapon();
