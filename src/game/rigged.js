@@ -203,6 +203,12 @@ export function makeWeaponMesh(name, camo) {
       kitTone(camo.cloth, 0.55),
       new THREE.Color(0x2a2c2f)
     ];
+    if (name === 'knife') {
+      // blades are steel, not camo — only the grip keeps a dark kit accent
+      slotColors[1] = new THREE.Color(0x9aa1a8);
+      slotColors[3] = new THREE.Color(0x7c828a);
+      slotColors[6] = new THREE.Color(0x33363b);
+    }
     const n = slot.length;
     const colors = new Uint8Array(n * 3);
     for (let i = 0; i < n; i++) {
