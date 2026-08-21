@@ -137,8 +137,8 @@ export class EnemyBot {
       const a = base + off;
       const sx = Math.sin(a), sz = Math.cos(a);
       // look a stride ahead so we steer before touching the wall
-      if ((ctx.isWalkable?.(p.x + sx * (s + 0.55), p.z + sz * (s + 0.55)) ?? true) &&
-          (ctx.isWalkable?.(p.x + sx * s, p.z + sz * s) ?? true)) {
+      if ((ctx.isWalkable?.(p.x + sx * (s + 0.55), p.z + sz * (s + 0.55), 0.55) ?? true) &&
+          (ctx.isWalkable?.(p.x + sx * s, p.z + sz * s, 0.55) ?? true)) {
         p.x += sx * s;
         p.z += sz * s;
         slewYaw(this.group, a, dt, 8);
@@ -161,7 +161,7 @@ export class EnemyBot {
         const a = (k / 10) * Math.PI * 2 + Math.random() * 0.5;
         const r = 1.3 + ring * 1.6 + Math.random() * 1.4;
         const x = p.x + Math.sin(a) * r, z = p.z + Math.cos(a) * r;
-        if (!(ctx.isWalkable?.(x, z) ?? true)) continue;
+        if (!(ctx.isWalkable?.(x, z, 0.75) ?? true)) continue;
         if (Math.hypot(playerPos.x - x, playerPos.z - z) < Math.min(dPlayer, 3.5)) continue;
         tmpV.set(x, 1.45, z);
         if (!ctx.los(tmpV, playerPos)) {
@@ -239,7 +239,7 @@ export class EnemyBot {
           for (let k = 0; k < 8; k++) {
             const a = (k / 8) * Math.PI * 2;
             const nx = p.x + Math.sin(a) * r, nz = p.z + Math.cos(a) * r;
-            if (ctx.isWalkable?.(nx, nz, 0.35) ?? true) {
+            if (ctx.isWalkable?.(nx, nz, 0.5) ?? true) {
               p.set(nx, p.y, nz);
               this.home.copy(p);
               this.patrolTo = null; // guard post at the corrected spot
@@ -421,7 +421,7 @@ export class EnemyBot {
         const a = Math.random() * Math.PI * 2;
         const x = this.group.position.x + Math.sin(a) * 1.3;
         const z = this.group.position.z + Math.cos(a) * 1.3;
-        if (ctx.isWalkable?.(x, z) ?? true) this.strafeGoal = new THREE.Vector3(x, 0, z);
+        if (ctx.isWalkable?.(x, z, 0.6) ?? true) this.strafeGoal = new THREE.Vector3(x, 0, z);
       }
       if (this.strafeGoal) {
         if (this.stepToward(this.strafeGoal, 1.7, dt, ctx, 0.9)) this.strafeGoal = null;
@@ -561,7 +561,10 @@ export class Comrade {
       dx = ctx.stackPos.x;
       dz = ctx.stackPos.z;
     } else if (!civ) {
-      const rx = -(-Math.cos(playerYaw)), rz = -Math.sin(playerYaw); // right of column
+      // stagger off the FORMATION axis (slow-moving, frozen on halts) so
+      // the commander looking around never swings these points
+      const colYaw = ctx.columnYaw ?? playerYaw;
+      const rx = Math.cos(colYaw), rz = -Math.sin(colYaw); // right of column
       dx += rx * this.temper.side;
       dz += rz * this.temper.side;
       if (!(ctx.isWalkable?.(dx, dz) ?? true)) { dx = targetPos.x; dz = targetPos.z; }
@@ -569,7 +572,9 @@ export class Comrade {
     // reaction latency: a parked soldier takes a personal beat to set off;
     // once in motion they track the column continuously
     const parked = this.smooth.distanceToSquared(this.adopted) < 0.09;
-    const goalMoved = (dx - this.adopted.x) ** 2 + (dz - this.adopted.z) ** 2 > 0.36;
+    // wide deadzone while parked: small target drift never uproots a
+    // settled soldier
+    const goalMoved = (dx - this.adopted.x) ** 2 + (dz - this.adopted.z) ** 2 > (parked ? 1.0 : 0.36);
     if (goalMoved && parked) {
       this.reactT += dt;
       if (this.reactT >= this.temper.delay) {
@@ -593,7 +598,7 @@ export class Comrade {
       tmpV.normalize();
       // steer around walls like the enemies do; the walk anim only plays
       // when we actually advance (no more running in place when blocked)
-      const walk = (x, z) => ctx.isWalkable?.(x, z, 0.35) ?? true;
+      const walk = (x, z) => ctx.isWalkable?.(x, z, 0.45) ?? true;
       const base = Math.atan2(tmpV.x, tmpV.z);
       const ahead = dist > 1.5 ? step + 0.5 : step;
       let advanced = false;
@@ -635,7 +640,7 @@ export class Comrade {
           const a = Math.random() * Math.PI * 2;
           const sx = this.smooth.x + Math.sin(a) * 1.2;
           const sz = this.smooth.z + Math.cos(a) * 1.2;
-          if (ctx.isWalkable?.(sx, sz) ?? true) this.strafeGoal = new THREE.Vector3(sx, 0, sz);
+          if (ctx.isWalkable?.(sx, sz, 0.55) ?? true) this.strafeGoal = new THREE.Vector3(sx, 0, sz);
         }
         if (this.strafeGoal) {
           tmpV.subVectors(this.strafeGoal, this.smooth);
@@ -693,7 +698,9 @@ export class Comrade {
       this.walkT += dt * 0.25;
       slewYaw(this.group, ctx.stackYaw ?? playerYaw + Math.PI, dt, 6);
       poseCombat(this.group, this.walkT);
-    } else if (!civ && (ctx.haltT ?? 0) > 1.1 + this.temper.delay) {
+    } else if (!civ && (this.posted || (ctx.haltT ?? 0) > 1.1 + this.temper.delay)) {
+      // sticky: once posted, stay posted through the commander's small
+      // adjustments — only real movement or contact breaks the perimeter
       // long halt: settle into a perimeter — each soldier owns a watch
       // sector and sweeps it, some take a knee, the rear man checks in on
       // the commander. Nobody mirrors the player's aim anymore.

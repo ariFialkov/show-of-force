@@ -1998,6 +1998,16 @@ export class Game {
     // watching perimeter on long halts instead of freezing mid-stride
     const playerMoving = Math.abs(this.controls.move.x) + Math.abs(this.controls.move.z) > 0.01;
     this.haltT = playerMoving || this.mode !== 'play' ? 0 : (this.haltT ?? 0) + dt;
+    // the formation's axis: follows the commander's heading slowly while
+    // marching and FREEZES on halts, so looking around never swings the
+    // column targets (that swing made idle comrades shuffle and re-kneel
+    // on every camera turn)
+    if (this.columnYaw === undefined) this.columnYaw = this.controls.yaw;
+    if (playerMoving) {
+      let dy = this.controls.yaw - this.columnYaw;
+      dy = ((dy + Math.PI) % (2 * Math.PI) + 2 * Math.PI) % (2 * Math.PI) - Math.PI;
+      this.columnYaw += Math.max(-2.5 * dt, Math.min(2.5 * dt, dy));
+    }
     // watch sectors on halt: right flank, left flank, rear, forward
     const WATCH = [Math.PI * 0.55, -Math.PI * 0.55, Math.PI, 0.25];
 
@@ -2042,7 +2052,7 @@ export class Game {
         const px = gate.dir.z, pz = -gate.dir.x; // door axis (lateral)
         const mk = (side) => {
           const sx = bx + px * 1.5 * side, sz = bz + pz * 1.5 * side;
-          return walk(sx, sz, 0.35) ? { pos: new THREE.Vector3(sx, 0, sz), yaw } : null;
+          return walk(sx, sz, 0.5) ? { pos: new THREE.Vector3(sx, 0, sz), yaw } : null;
         };
         // assign ONCE per gate: the two comrades nearest the door take the
         // side of the door axis they are already on, so their approach
@@ -2086,7 +2096,8 @@ export class Game {
         playerPos: this.player.pos,
         haltT: this.haltT,
         sneaking,
-        watchYaw: this.controls.yaw + Math.PI + WATCH[i % WATCH.length],
+        columnYaw: this.columnYaw,
+        watchYaw: this.columnYaw + Math.PI + WATCH[i % WATCH.length],
         facePlayer: i === this.comrades.length - 1,
         // comrades never touch the HVT — that kill belongs to the commander
         enemies: combat
