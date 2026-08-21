@@ -2,7 +2,7 @@
 // Everything is built from primitives so the game ships with zero assets.
 
 import * as THREE from 'three';
-import { riggedReady, makeRiggedSoldier, riggedWalk, riggedIdle, riggedDeath, riggedHit, riggedAim, riggedFire, riggedStun, riggedReload, riggedSit } from './rigged.js';
+import { riggedReady, makeRiggedSoldier, riggedWalk, riggedIdle, riggedDeath, riggedHit, riggedAim, riggedFire, riggedStun, riggedReload, riggedSit, makeWeaponMesh } from './rigged.js';
 
 const mat = (color, opts = {}) => new THREE.MeshLambertMaterial({ color, ...opts });
 
@@ -227,7 +227,29 @@ export function makeCivilian(shirtColor = 0x7a6a4a) {
 
 // First-person models for each squad's backup weapon. Built around the same
 // anchor/orientation as the primary rifle viewmodel (pointing -Z).
-export function makeBackupViewmodel(kind) {
+// Baked weapon prefab in a camera-ready wrapper (muzzle toward -Z, matching
+// the viewmodel convention). Real-size weapons overwhelm the frame at arm
+// distance, so each gets a first-person presentation scale. Null when the
+// bake lacks the weapon.
+const VM_SCALE = { rifle: 0.72, shotgun: 0.62, harpoon: 0.58, flashgl: 0.85, rpg: 0.45, knife: 1.0 };
+
+export function makeWeaponViewmodel(name, camo) {
+  const m = makeWeaponMesh(name, camo);
+  if (!m) return null;
+  const g = new THREE.Group();
+  m.rotation.y = Math.PI; // canonical barrel +Z -> camera forward -Z
+  m.scale.setScalar(VM_SCALE[name] ?? 0.7);
+  g.add(m);
+  return g;
+}
+
+const BACKUP_WEAPON = { harpoon: 'harpoon', knife: 'knife', flashgl: 'flashgl', shotgun: 'shotgun', rpg: 'rpg' };
+
+export function makeBackupViewmodel(kind, camo = null) {
+  if (camo) {
+    const baked = makeWeaponViewmodel(BACKUP_WEAPON[kind] ?? kind, camo);
+    if (baked) return baked;
+  }
   const g = new THREE.Group();
   const cyl = (r1, r2, len, c, seg = 10) => {
     const m = new THREE.Mesh(new THREE.CylinderGeometry(r1, r2, len, seg), mat(c));

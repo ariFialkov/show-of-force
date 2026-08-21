@@ -14,7 +14,7 @@ import { RISK_FACTORS } from '../config.js';
 import { buildWorld } from './world.js';
 import { Effects, sound } from './effects.js';
 import { EnemyBot, Comrade } from './bots.js';
-import { makeVehicle, makeCar, makeCivilian, makeObjectiveProp, makeGate, makeBackupViewmodel, animateWalk, poseIdle, poseSit } from './models.js';
+import { makeVehicle, makeCar, makeCivilian, makeObjectiveProp, makeGate, makeBackupViewmodel, makeWeaponViewmodel, animateWalk, poseIdle, poseSit } from './models.js';
 
 // Squad backup weapons (hold FIRE on mobile / N on desktop to switch)
 const BACKUPS = {
@@ -308,23 +308,28 @@ export class Game {
   buildViewmodel() {
     if (this.viewmodel) this.camera.remove(this.viewmodel);
     if (this.viewmodelBackup) this.camera.remove(this.viewmodelBackup);
-    const g = new THREE.Group();
-    const mat = new THREE.MeshLambertMaterial({ color: 0x191c21 });
-    const body = new THREE.Mesh(new THREE.BoxGeometry(0.06, 0.09, 0.55), mat);
-    const grip = new THREE.Mesh(new THREE.BoxGeometry(0.05, 0.13, 0.07), mat);
-    grip.position.set(0, -0.09, 0.12);
-    const sight = new THREE.Mesh(new THREE.BoxGeometry(0.02, 0.05, 0.1), mat);
-    sight.position.set(0, 0.07, 0.05);
-    const hands = new THREE.Mesh(new THREE.BoxGeometry(0.07, 0.06, 0.1), new THREE.MeshLambertMaterial({ color: this.mission.team.camo.cloth }));
-    hands.position.set(0, -0.06, -0.12);
-    g.add(body, grip, sight, hands);
-    g.position.set(0.22, -0.2, -0.45);
+    const camo = this.mission.team.camo;
+    let g = makeWeaponViewmodel('rifle', camo);
+    if (!g) {
+      // procedural fallback when the baked weapon set is unavailable
+      g = new THREE.Group();
+      const mat = new THREE.MeshLambertMaterial({ color: 0x191c21 });
+      const body = new THREE.Mesh(new THREE.BoxGeometry(0.06, 0.09, 0.55), mat);
+      const grip = new THREE.Mesh(new THREE.BoxGeometry(0.05, 0.13, 0.07), mat);
+      grip.position.set(0, -0.09, 0.12);
+      const sight = new THREE.Mesh(new THREE.BoxGeometry(0.02, 0.05, 0.1), mat);
+      sight.position.set(0, 0.07, 0.05);
+      const hands = new THREE.Mesh(new THREE.BoxGeometry(0.07, 0.06, 0.1), new THREE.MeshLambertMaterial({ color: camo.cloth }));
+      hands.position.set(0, -0.06, -0.12);
+      g.add(body, grip, sight, hands);
+    }
+    g.position.set(0.24, -0.22, -0.5);
     this.viewmodel = g;
     this.viewmodelPrimary = g;
     this.camera.add(g);
 
-    const backup = makeBackupViewmodel(this.mission.team.backup);
-    backup.position.set(0.22, -0.2, -0.45);
+    const backup = makeBackupViewmodel(this.mission.team.backup, camo);
+    backup.position.set(0.24, -0.22, -0.5);
     backup.visible = false;
     this.viewmodelBackup = backup;
     this.camera.add(backup);
@@ -1936,9 +1941,9 @@ export class Game {
             this.throwAnimT -= dt;
             toss = Math.sin(Math.PI * (1 - Math.max(0, this.throwAnimT) / 0.55));
           }
-          this.viewmodel.position.z += (-0.45 - this.viewmodel.position.z) * Math.min(1, dt * 14);
-          const targetX = (this.controls.scoped ? 0.0 : 0.22) + toss * 0.12;
-          const targetY = (this.controls.scoped ? -0.12 : -0.2) - toss * 0.2 + Math.sin(this.player.bob) * 0.006;
+          this.viewmodel.position.z += (-0.5 - this.viewmodel.position.z) * Math.min(1, dt * 14);
+          const targetX = (this.controls.scoped ? 0.0 : 0.24) + toss * 0.12;
+          const targetY = (this.controls.scoped ? -0.14 : -0.22) - toss * 0.2 + Math.sin(this.player.bob) * 0.006;
           this.viewmodel.position.x += (targetX - this.viewmodel.position.x) * Math.min(1, dt * 10);
           this.viewmodel.position.y += (targetY - this.viewmodel.position.y) * Math.min(1, dt * 10);
           const dyaw = this.controls.yaw - (this.lastYaw ?? this.controls.yaw);

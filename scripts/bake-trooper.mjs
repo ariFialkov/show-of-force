@@ -455,6 +455,154 @@ if (fs.existsSync(GEAR_DIR)) {
   }
 }
 
+// ----------------------------------------------------------------- weapons
+// Weapon prefabs from assets-src/weapons/: merged, welded, decimated and
+// normalized to a canonical frame — barrel along +Z, real-world length in
+// metres, origin at the grip. Connected components of the final mesh are
+// ranked by size and stored as a per-vertex slot id so the runtime can
+// tint parts (receiver, furniture, magazine...) from the squad palette.
+const WEAP_DIR = 'assets-src/weapons';
+const WEAPON_FIT = {
+  rifle:   { target: 6000, len: 0.97, rot: [0, Math.PI, 0], originFrac: 0.08, dy: 0 },
+  shotgun: { target: 5000, len: 1.02, rot: [0, Math.PI, 0], originFrac: 0.08, dy: 0 },
+  harpoon: { target: 5000, len: 0.88, rot: [0, 0, 0], originFrac: 0.08, dy: 0 },
+  rpg:     { target: 5000, len: 1.35, rot: [0, 0, 0], originFrac: 0.0, dy: 0 },
+  flashgl: { target: 3500, len: 0.62, rot: [0, Math.PI, 0], originFrac: 0.08, dy: 0 },
+  knife:   { target: 2000, len: 0.38, rot: [0, 0, 0], originFrac: 0.0, dy: 0 }
+};
+
+function bakeWeapon(name, root, cfg) {
+  root.updateMatrixWorld(true);
+  const soup = [];
+  const tv = new THREE.Vector3();
+  root.traverse((o) => {
+    if (!o.isMesh) return;
+    const g = o.geometry;
+    const pos = g.attributes.position;
+    const push = (vi) => {
+      tv.fromBufferAttribute(pos, vi).applyMatrix4(o.matrixWorld);
+      soup.push(tv.x, tv.y, tv.z);
+    };
+    if (g.index) for (let i = 0; i < g.index.count; i++) push(g.index.array[i]);
+    else for (let i = 0; i < pos.count; i++) push(i);
+  });
+  const nVerts = soup.length / 3;
+
+  // weld by quantized position
+  const soupBox = new THREE.Box3();
+  for (let i = 0; i < soup.length; i += 3) soupBox.expandByPoint(tv.set(soup[i], soup[i + 1], soup[i + 2]));
+  const soupSize = new THREE.Vector3();
+  soupBox.getSize(soupSize);
+  const q = 3000 / Math.max(soupSize.x, soupSize.y, soupSize.z);
+  const weldMapW = new Map();
+  const remapW = new Uint32Array(nVerts);
+  const uniq = [];
+  for (let v = 0; v < nVerts; v++) {
+    const key = `${Math.round(soup[v * 3] * q)},${Math.round(soup[v * 3 + 1] * q)},${Math.round(soup[v * 3 + 2] * q)}`;
+    let idx = weldMapW.get(key);
+    if (idx === undefined) {
+      idx = uniq.length / 3;
+      weldMapW.set(key, idx);
+      uniq.push(soup[v * 3], soup[v * 3 + 1], soup[v * 3 + 2]);
+    }
+    remapW[v] = idx;
+  }
+  const idxTmpW = [];
+  for (let t = 0; t < nVerts; t += 3) {
+    const a = remapW[t], b = remapW[t + 1], c = remapW[t + 2];
+    if (a !== b && b !== c && a !== c) idxTmpW.push(a, b, c);
+  }
+  const positions = Float32Array.from(uniq);
+  const srcIdx = Uint32Array.from(idxTmpW);
+  const targetIdx = Math.min(cfg.target * 3, srcIdx.length);
+  const simp = targetIdx < srcIdx.length
+    ? MeshoptSimplifier.simplify(srcIdx, positions, 3, targetIdx, 0.03, [])[0]
+    : srcIdx;
+
+  // compact
+  const remap2 = new Int32Array(positions.length / 3).fill(-1);
+  let usedW = 0;
+  for (const i of simp) if (remap2[i] === -1) remap2[i] = usedW++;
+  const outP = new Float32Array(usedW * 3);
+  for (let i = 0; i < remap2.length; i++) {
+    const j = remap2[i];
+    if (j === -1) continue;
+    outP[j * 3] = positions[i * 3];
+    outP[j * 3 + 1] = positions[i * 3 + 1];
+    outP[j * 3 + 2] = positions[i * 3 + 2];
+  }
+  const outI = new Uint16Array(simp.length);
+  for (let i = 0; i < simp.length; i++) outI[i] = remap2[simp[i]];
+
+  // connected components -> part slots (union-find over triangle edges)
+  const parent = new Int32Array(usedW);
+  for (let i = 0; i < usedW; i++) parent[i] = i;
+  const find = (x) => { while (parent[x] !== x) { parent[x] = parent[parent[x]]; x = parent[x]; } return x; };
+  for (let t = 0; t < outI.length; t += 3) {
+    const a = find(outI[t]), b = find(outI[t + 1]), c = find(outI[t + 2]);
+    parent[b] = a;
+    parent[c] = a;
+  }
+  const compTris = new Map();
+  for (let t = 0; t < outI.length; t += 3) {
+    const r = find(outI[t]);
+    compTris.set(r, (compTris.get(r) ?? 0) + 1);
+  }
+  const ranked = [...compTris.entries()].sort((a, b) => b[1] - a[1]).map(([root2]) => root2);
+  const rankOf = new Map(ranked.map((r, i) => [r, Math.min(i, 7)]));
+  const outS = new Uint8Array(usedW);
+  for (let v = 0; v < usedW; v++) outS[v] = rankOf.get(find(v)) ?? 0;
+
+  // canonicalize: center, longest axis -> +Z, extra rot, metre length,
+  // origin shifted back toward the grip
+  const geom = new THREE.BufferGeometry();
+  geom.setAttribute('position', new THREE.BufferAttribute(outP, 3));
+  geom.setIndex(new THREE.BufferAttribute(outI, 1));
+  geom.computeBoundingBox();
+  const c0 = new THREE.Vector3();
+  geom.boundingBox.getCenter(c0);
+  geom.translate(-c0.x, -c0.y, -c0.z);
+  geom.computeBoundingBox();
+  const gs = new THREE.Vector3();
+  geom.boundingBox.getSize(gs);
+  if (gs.x >= gs.y && gs.x >= gs.z) geom.rotateY(Math.PI / 2);        // X -> Z
+  else if (gs.y >= gs.x && gs.y >= gs.z) geom.rotateX(Math.PI / 2);   // Y -> Z
+  geom.rotateX(cfg.rot[0]); geom.rotateY(cfg.rot[1]); geom.rotateZ(cfg.rot[2]);
+  geom.computeBoundingBox();
+  geom.boundingBox.getSize(gs);
+  const sW = cfg.len / gs.z;
+  geom.scale(sW, sW, sW);
+  geom.translate(0, cfg.dy ?? 0, -(cfg.originFrac ?? 0) * cfg.len);
+  geom.computeBoundingBox();
+  geom.computeVertexNormals();
+  const nrmA = geom.attributes.normal;
+  const outN = new Int8Array(usedW * 3);
+  for (let i = 0; i < usedW * 3; i++) outN[i] = Math.max(-127, Math.min(127, Math.round(nrmA.array[i] * 127)));
+  console.log(`weapon '${name}': ${nVerts / 3} -> ${outI.length / 3} tris, ${usedW} verts, ${ranked.length} parts`);
+  return {
+    name,
+    position: geom.attributes.position.array,
+    normal: outN,
+    index: outI,
+    slot: outS,
+    muzzleZ: +geom.boundingBox.max.z.toFixed(3),
+    len: cfg.len
+  };
+}
+
+const weaponsBaked = [];
+if (fs.existsSync(WEAP_DIR)) {
+  for (const f of fs.readdirSync(WEAP_DIR).sort()) {
+    if (!f.toLowerCase().endsWith('.fbx')) continue;
+    const name = f.replace(/\.fbx$/i, '');
+    const cfg = WEAPON_FIT[name];
+    if (!cfg) { console.warn(`  ${f}: no WEAPON_FIT entry, skipped`); continue; }
+    const wbuf = fs.readFileSync(path.join(WEAP_DIR, f));
+    const root = new FBXLoader().parse(wbuf.buffer.slice(wbuf.byteOffset, wbuf.byteOffset + wbuf.byteLength), '');
+    weaponsBaked.push(bakeWeapon(name, root, cfg));
+  }
+}
+
 // ------------------------------------------------------------------- write
 
 const sections = [];
@@ -490,6 +638,19 @@ clips.forEach((c, ci) => {
     t.valuesSection = `c${ci}v${ti}`;
   });
 });
+header.weapons = {};
+for (const w of weaponsBaked) {
+  header.weapons[w.name] = {
+    vertexCount: w.position.length / 3,
+    triCount: w.index.length / 3,
+    muzzleZ: w.muzzleZ,
+    len: w.len
+  };
+  addSection(`weapon:${w.name}:p`, w.position);
+  addSection(`weapon:${w.name}:n`, w.normal);
+  addSection(`weapon:${w.name}:i`, w.index);
+  addSection(`weapon:${w.name}:s`, w.slot);
+}
 header.gear = {};
 for (const g of gearBaked) {
   header.gear[g.name] = {

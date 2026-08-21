@@ -72,6 +72,8 @@ export async function initRigged(url) {
       gear: header.gear ?? {},
       gearGeomCache: new Map(),
       gearSection: section,
+      weapons: header.weapons ?? {},
+      weaponGeomCache: new Map(),
       clips,
       // random pool for gunshot deaths; explosion deaths are cause-specific
       deathNames: Object.keys(clips).filter((n) => n.startsWith('death') && !n.includes('explosion')),
@@ -168,6 +170,62 @@ export function getGearGeometry(name) {
   geom.computeBoundingSphere();
   template.gearGeomCache.set(name, geom);
   return geom;
+}
+
+// ---------------------------------------------------------------- weapons
+
+// Baked weapon prefab, tinted from the squad palette. Parts (connected
+// components ranked by size at bake time) alternate gunmetal hardware and
+// kit-toned furniture so the weapon matches the soldier without being one
+// flat color. Canonical frame: barrel +Z, origin at the grip, metres.
+export function makeWeaponMesh(name, camo) {
+  if (!template?.weapons?.[name]) return null;
+  const key = name + ':' + paletteKey(camo, true);
+  let geom = template.weaponGeomCache.get(key);
+  if (!geom) {
+    const pos = template.gearSection(`weapon:${name}:p`, Float32Array);
+    const nrm = template.gearSection(`weapon:${name}:n`, Int8Array);
+    const idx = template.gearSection(`weapon:${name}:i`, Uint16Array);
+    const slot = template.gearSection(`weapon:${name}:s`, Uint8Array);
+    const kitTone = (hex, f) => {
+      const c = new THREE.Color(hex).multiplyScalar(f);
+      c.getHSL(liftHsl);
+      c.setHSL(liftHsl.h, Math.min(1, liftHsl.s), Math.min(0.6, 0.12 + liftHsl.l));
+      return c;
+    };
+    const slotColors = [
+      new THREE.Color(0x2c2f34),   // largest part: gunmetal body
+      kitTone(camo.cloth, 0.78),   // furniture in the kit tone
+      new THREE.Color(0x1e2023),
+      kitTone(camo.vest ?? camo.cloth, 0.62),
+      new THREE.Color(0x35383d),
+      new THREE.Color(0x232528),
+      kitTone(camo.cloth, 0.55),
+      new THREE.Color(0x2a2c2f)
+    ];
+    const n = slot.length;
+    const colors = new Uint8Array(n * 3);
+    for (let i = 0; i < n; i++) {
+      const c = slotColors[slot[i]];
+      const g = 1 + (((i * 2654435761) >>> 16 & 255) / 255 - 0.5) * 0.07;
+      colors[i * 3] = Math.min(255, c.r * 255 * g);
+      colors[i * 3 + 1] = Math.min(255, c.g * 255 * g);
+      colors[i * 3 + 2] = Math.min(255, c.b * 255 * g);
+    }
+    geom = new THREE.BufferGeometry();
+    geom.setIndex(new THREE.BufferAttribute(idx, 1));
+    geom.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+    geom.setAttribute('normal', new THREE.BufferAttribute(nrm, 3, true));
+    geom.setAttribute('color', new THREE.BufferAttribute(colors, 3, true));
+    geom.computeBoundingSphere();
+    template.weaponGeomCache.set(key, geom);
+  }
+  const mesh = new THREE.Mesh(geom, new THREE.MeshPhongMaterial({
+    vertexColors: true, specular: 0x4a4a4a, shininess: 34
+  }));
+  mesh.castShadow = !IS_TOUCH;
+  mesh.userData.muzzleZ = template.weapons[name].muzzleZ;
+  return mesh;
 }
 
 // --------------------------------------------------------- instantiation
@@ -333,12 +391,12 @@ export function makeRiggedSoldier(camo, { rifle = true, mask = true, civilian = 
     helper.updateMatrix();
     const local = helper.matrix.clone()
       .premultiply(new THREE.Matrix4().copy(handR.matrixWorld).invert());
-    const r = makeRifle();
+    const r = makeWeaponMesh('rifle', camo) ?? makeRifle();
     local.decompose(r.position, r.quaternion, r.scale);
     handR.add(r);
     r.translateZ(0.14 / template.scale); // slide grip back into the palm
     r.translateY(-0.03 / template.scale);
-    muzzle.position.set(0, 0.01, 0.62);
+    muzzle.position.set(0, 0.01, r.userData.muzzleZ ?? 0.62);
     r.add(muzzle);
   } else {
     outer.add(muzzle);
