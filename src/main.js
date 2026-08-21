@@ -22,6 +22,15 @@ const game = new Game(document.getElementById('gl'), {
 window.__game = game;
 import('./game/models.js').then((m) => { window.__makeSoldier = m.makeSoldier; });
 import('./game/rigged.js').then((m) => { window.__rigged = m; });
+window.__forceLocation = (id) => {
+  clearTimeout(rotationTimer);
+  clearInterval(rosterTimer);
+  let m = null;
+  for (let i = 0; i < 500 && (!m || m.location.id !== id); i++) m = generateMission();
+  mission = m;
+  game.setMission(m);
+  ui.renderLobbyMission(m);
+};
 
 // unlock audio on first interaction
 game.controls.onFirstInteract = () => sound.ensure();
