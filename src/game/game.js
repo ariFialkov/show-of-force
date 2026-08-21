@@ -316,6 +316,15 @@ export class Game {
     if (this.player.reload > 0) rig.play('reload', { fade: 0.12 });
     else if (this.vmFireT > 0) rig.play('fire', { fade: 0.05 });
     else rig.play('aim', { fade: 0.16 });
+    // the weapon was fitted in the bind pose; once the carry stance has
+    // settled, re-align the barrel to the crosshair from the live pose
+    if (!vm.userData.aligned) {
+      vm.userData.alignT = (vm.userData.alignT ?? 0) + dt;
+      if (vm.userData.alignT > 0.45) {
+        vm.userData.aligned = true;
+        rig.alignWeapon?.();
+      }
+    }
   }
 
   buildViewmodel() {

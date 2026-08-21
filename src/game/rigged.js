@@ -13,6 +13,7 @@ import * as THREE from 'three';
 import { IS_TOUCH } from './controls.js';
 
 const TARGET_HEIGHT = 1.76;
+const WEAPON_SCALE = 1.2; // held weapons read small against the bulky trooper
 
 let template = null; // { position, normal, skinIndex, skinWeight, zones, index, boneDefs, boneInverses, clip, scale, minY, headY }
 const paletteGeomCache = new Map();
@@ -423,22 +424,44 @@ export function makeRiggedSoldier(camo, { rifle = true, mask = true, civilian = 
   // rifle spanning the hands: grip at the right hand, barrel aimed at the
   // left hand (the idle clip holds a two-handed low-ready pose)
   let muzzle = new THREE.Object3D();
+  let alignWeapon = null;
   const handR = boneMap.get('mixamorigRightHand');
   const handL = boneMap.get('mixamorigLeftHand');
   if (rifle && handR && handL) {
     outer.updateMatrixWorld(true);
     const rhP = new THREE.Vector3().setFromMatrixPosition(handR.matrixWorld);
     const lhP = new THREE.Vector3().setFromMatrixPosition(handL.matrixWorld);
+    // Orient from the hand span (natural roll/cant), then re-aim the barrel
+    // exactly along the soldier's forward axis: aiming straight at the
+    // support hand throws the muzzle across the body, and for the player
+    // the barrel must agree with the center-screen crosshair.
     const helper = new THREE.Object3D();
     helper.position.copy(rhP);
-    helper.lookAt(lhP); // +Z (barrel) toward the support hand
+    helper.lookAt(lhP); // +Z = barrel
     helper.updateMatrix();
     const local = helper.matrix.clone()
       .premultiply(new THREE.Matrix4().copy(handR.matrixWorld).invert());
     const r = makeWeaponMesh(weapon, camo) ?? makeRifle();
     local.decompose(r.position, r.quaternion, r.scale);
+    r.scale.multiplyScalar(WEAPON_SCALE);
     handR.add(r);
-    r.translateZ(0.05 / template.scale); // grip into the palm
+    // Minimal rotation that swings the barrel onto body-forward, applied in
+    // hand-local space so the grip stays put. Re-runnable: the pose the
+    // weapon was fitted in isn't the pose it is carried in, so the caller
+    // can re-align once the character settles into its resting clip.
+    alignWeapon = () => {
+      outer.updateMatrixWorld(true);
+      // NOTE: decompose, not setFromRotationMatrix — the bone's world matrix
+      // carries the rig's uniform scale, which corrupts a raw quaternion read
+      const handQ = new THREE.Quaternion();
+      handR.matrixWorld.decompose(new THREE.Vector3(), handQ, new THREE.Vector3());
+      const barrelWorld = new THREE.Vector3(0, 0, 1)
+        .applyQuaternion(new THREE.Quaternion().copy(handQ).multiply(r.quaternion));
+      const fix = new THREE.Quaternion().setFromUnitVectors(barrelWorld, new THREE.Vector3(0, 0, 1));
+      r.quaternion.premultiply(new THREE.Quaternion().copy(handQ).invert().multiply(fix).multiply(handQ));
+    };
+    alignWeapon();
+    r.translateZ(0.17 / template.scale); // carried forward of the fists
     r.translateY(0.05 / template.scale); // ride above the fists, clear of the chest
     if (armsOnly) {
       // the held weapon rides over the world with the arms
@@ -486,7 +509,7 @@ export function makeRiggedSoldier(camo, { rifle = true, mask = true, civilian = 
     if (b) rest[k] = { q: b.quaternion.clone(), p: b.position.clone() };
   }
 
-  outer.userData.rig = { ...rig, rest, mixer, actions, play, state: rigState };
+  outer.userData.rig = { ...rig, rest, mixer, actions, play, state: rigState, alignWeapon };
   outer.userData.tick = (dt) => { mixer?.update(dt); };
   outer.userData.parts = {
     legL: rig.legL, legR: rig.legR, armL: rig.armL, armR: rig.armR,
