@@ -332,7 +332,7 @@ function blobShadow(radius) {
 
 // Build one character. Returns a group with the same userData contract as
 // the procedural soldiers (parts, tick, rig flag).
-export function makeRiggedSoldier(camo, { rifle = true, mask = true, civilian = false, headgear = null, armsOnly = false, weapon = 'rifle' } = {}) {
+export function makeRiggedSoldier(camo, { rifle = true, mask = true, civilian = false, headgear = null, armsOnly = false, weapon = 'rifle', backupWeapon = null } = {}) {
   const outer = new THREE.Group();
   outer.userData.civilian = civilian;
 
@@ -425,6 +425,7 @@ export function makeRiggedSoldier(camo, { rifle = true, mask = true, civilian = 
   // left hand (the idle clip holds a two-handed low-ready pose)
   let muzzle = new THREE.Object3D();
   let alignWeapon = null;
+  let swapWeapon = null;
   const handR = boneMap.get('mixamorigRightHand');
   const handL = boneMap.get('mixamorigLeftHand');
   if (rifle && handR && handL) {
@@ -445,6 +446,21 @@ export function makeRiggedSoldier(camo, { rifle = true, mask = true, civilian = 
     local.decompose(r.position, r.quaternion, r.scale);
     r.scale.multiplyScalar(WEAPON_SCALE);
     handR.add(r);
+    // Optional second weapon in the same grip: every baked prefab shares the
+    // canonical frame (barrel +Z, origin at the grip), so it inherits the
+    // primary's fitted transform exactly and only visibility toggles.
+    let rB = null;
+    if (backupWeapon && backupWeapon !== weapon) {
+      rB = makeWeaponMesh(backupWeapon, camo);
+      if (rB) {
+        rB.position.copy(r.position);
+        rB.quaternion.copy(r.quaternion);
+        rB.scale.copy(r.scale);
+        rB.visible = false;
+        handR.add(rB);
+      }
+    }
+    const held = rB ? [r, rB] : [r];
     // Minimal rotation that swings the barrel onto body-forward, applied in
     // hand-local space so the grip stays put. Re-runnable: the pose the
     // weapon was fitted in isn't the pose it is carried in, so the caller
@@ -462,20 +478,37 @@ export function makeRiggedSoldier(camo, { rifle = true, mask = true, civilian = 
       // would peg the weapon to a fixed compass direction
       const fwd = new THREE.Vector3(0, 0, 1).transformDirection(outer.matrixWorld).normalize();
       const fix = new THREE.Quaternion().setFromUnitVectors(barrelWorld, fwd);
-      r.quaternion.premultiply(new THREE.Quaternion().copy(handQ).invert().multiply(fix).multiply(handQ));
+      const q = new THREE.Quaternion().copy(handQ).invert().multiply(fix).multiply(handQ);
+      for (const w of held) w.quaternion.premultiply(q);
     };
     alignWeapon();
-    r.translateZ(0.32 / template.scale); // carried well forward of the fists
-    r.translateY(0.05 / template.scale); // ride above the fists, clear of the chest
+    for (const w of held) {
+      w.translateZ(0.32 / template.scale); // carried well forward of the fists
+      w.translateY(0.05 / template.scale); // ride above the fists, clear of the chest
+    }
     if (armsOnly) {
       // the held weapon rides over the world with the arms
-      r.material = r.material.clone();
-      r.material.depthTest = false;
-      r.renderOrder = 501;
-      r.castShadow = false;
+      for (const w of held) {
+        w.material = w.material.clone();
+        w.material.depthTest = false;
+        w.renderOrder = 501;
+        w.castShadow = false;
+      }
     }
+    // each weapon carries its own muzzle point; swapping updates parts.muzzle
     muzzle.position.set(0, 0.01, r.userData.muzzleZ ?? 0.62);
     r.add(muzzle);
+    if (rB) {
+      const mB = new THREE.Object3D();
+      mB.position.set(0, 0.01, rB.userData.muzzleZ ?? 0.62);
+      rB.add(mB);
+      swapWeapon = (toBackup) => {
+        r.visible = !toBackup;
+        rB.visible = toBackup;
+        outer.userData.parts.muzzle = toBackup ? mB : muzzle;
+        return true;
+      };
+    }
   } else {
     outer.add(muzzle);
     muzzle.position.set(0, 1.2, 0.4);
@@ -513,7 +546,7 @@ export function makeRiggedSoldier(camo, { rifle = true, mask = true, civilian = 
     if (b) rest[k] = { q: b.quaternion.clone(), p: b.position.clone() };
   }
 
-  outer.userData.rig = { ...rig, rest, mixer, actions, play, state: rigState, alignWeapon };
+  outer.userData.rig = { ...rig, rest, mixer, actions, play, state: rigState, alignWeapon, swapWeapon };
   outer.userData.tick = (dt) => { mixer?.update(dt); };
   outer.userData.parts = {
     legL: rig.legL, legR: rig.legR, armL: rig.armL, armR: rig.armR,

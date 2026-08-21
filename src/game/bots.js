@@ -49,7 +49,10 @@ export class EnemyBot {
     this.scene = scene;
     this.seg = seg;
     this.elevated = opts.elevated ?? false; // e.g. tower snipers never move
-    this.group = makeSoldier(ENEMY_CAMO);
+    // a minority of the garrison carries the theatre's specialist weapon
+    // instead of a rifle (set by the game from the mission's team)
+    this.weapon = opts.weapon ?? 'rifle';
+    this.group = makeSoldier(ENEMY_CAMO, { weapon: this.weapon });
     this.group.position.copy(pos);
     this.group.userData.enemyId = this.id;
     scene.add(this.group);
@@ -522,6 +525,24 @@ export class Comrade {
     this.kneel = false;
     this.strafeT = 3 + Math.random() * 4;
     this.strafeGoal = null;
+    // occasional secondary-weapon stint while fighting: each comrade runs
+    // its own clock so the squad never swaps in unison
+    this.hasBackup = !!this.group.userData.rig?.swapWeapon;
+    this.onBackup = false;
+    this.swapT = 14 + Math.random() * 22;
+  }
+
+  // Cycle to the squad's secondary for a short burst of shots, then back.
+  updateWeaponSwap(dt, engaged) {
+    if (!this.hasBackup) return;
+    this.swapT -= engaged ? dt : dt * 0.25;
+    if (this.swapT > 0) return;
+    this.onBackup = !this.onBackup;
+    this.group.userData.rig.swapWeapon(this.onBackup);
+    // reload sells the change of weapon, and gates the trigger meanwhile
+    const rd = startReload(this.group);
+    this.killTimer = Math.max(this.killTimer, rd > 0 ? rd * 0.6 : 0.8);
+    this.swapT = this.onBackup ? 6 + Math.random() * 7 : 18 + Math.random() * 26;
   }
 
   // Formation movement: seek an assigned column point (computed by the game
@@ -594,6 +615,7 @@ export class Comrade {
     tmpV.y = 0;
     const dist = tmpV.length();
     const holdForFight = target !== null && dist < 7;
+    this.updateWeaponSwap(dt, target !== null);
     let moving = false;
     let gait = 1;
     if (!holdForFight && dist > 0.22) {

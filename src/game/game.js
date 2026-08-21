@@ -138,7 +138,7 @@ export class Game {
         if (nb && rng.chance(0.7)) {
           patrolTo = new THREE.Vector3(nb.x * S + rng.range(-1, 1), 0, nb.z * S + rng.range(-1, 1));
         }
-        this.enemies.push(new EnemyBot(this.scene, pos, patrolTo, seg));
+        this.enemies.push(new EnemyBot(this.scene, pos, patrolTo, seg, { weapon: this.enemyWeapon() }));
       }
     }
   }
@@ -241,7 +241,10 @@ export class Game {
     for (let i = 0; i < this.comradeSlots.length; i++) {
       const colOffset = this.comradeSlots[i] - this.playerSlot; // <0 ahead, >0 behind
       const c = new Comrade(this.scene, this.mission.team.camo, this.mission.roster[i], null,
-        { headgear: this.mission.team.gear });
+        {
+          headgear: this.mission.team.gear,
+          backupWeapon: { harpoon: 'harpoon', knife: 'knife', flashgl: 'flashgl', shotgun: 'shotgun', rpg: 'rpg' }[this.mission.team.backup] ?? null
+        });
       c.setPosition(
         new THREE.Vector3(start.x - fwd.x * colOffset * COLUMN_SPACING, 0, start.z - fwd.z * colOffset * COLUMN_SPACING),
         this.controls.yaw + Math.PI
@@ -678,7 +681,8 @@ export class Game {
   spawnGuards(step, pos, offsets) {
     for (const [dx, dz] of offsets) {
       this.enemies.push(new EnemyBot(
-        this.scene, new THREE.Vector3(pos.x + dx, 0, pos.z + dz), null, step));
+        this.scene, new THREE.Vector3(pos.x + dx, 0, pos.z + dz), null, step,
+        { weapon: this.enemyWeapon() }));
     }
   }
 
@@ -955,6 +959,14 @@ export class Game {
         apply(bodies[i], (dx / d) * (R - d) * 0.3, (dz / d) * (R - d) * 0.3);
       }
     }
+  }
+
+  // ~1 in 5 of the garrison fields the theatre's specialist weapon (the
+  // same one this map's squad carries as a backup) instead of a rifle
+  enemyWeapon(chance = 0.2) {
+    const backup = this.mission?.team?.backup;
+    const name = { harpoon: 'harpoon', knife: 'knife', flashgl: 'flashgl', shotgun: 'shotgun', rpg: 'rpg' }[backup];
+    return name && Math.random() < chance ? name : 'rifle';
   }
 
   botCtxExtras() {
@@ -1712,7 +1724,7 @@ export class Game {
       if (!c) break;
       const e = new EnemyBot(this.scene,
         new THREE.Vector3(c.x * S + (Math.random() - 0.5) * 2, 0, c.z * S + (Math.random() - 0.5) * 2),
-        null, step);
+        null, step, { weapon: this.enemyWeapon() });
       e.engage();
       this.enemies.push(e);
       this.round.segEnemyTotal++;
