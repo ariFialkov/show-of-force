@@ -232,14 +232,63 @@ export function makeCivilian(shirtColor = 0x7a6a4a) {
 // distance, so each gets a first-person presentation scale. Null when the
 // bake lacks the weapon.
 const VM_SCALE = { rifle: 0.72, shotgun: 0.62, harpoon: 0.58, flashgl: 0.85, rpg: 0.45, knife: 1.0 };
+// hand anchors in wrapper space (probed against the rendered weapons):
+// g = trigger hand at the pistol grip, s = support hand under the forend
+const VM_HANDS = {
+  rifle:   { fwd: 0.08, g: [0.052, -0.058, 0.06], s: [0.05, -0.028, -0.19] },
+  shotgun: { fwd: 0.08, g: [0.052, -0.055, 0.05], s: [0.05, -0.032, -0.2] },
+  harpoon: { fwd: 0.08, g: [0.052, -0.055, 0.02], s: [0.05, -0.036, -0.18] },
+  flashgl: { fwd: 0.08, g: [0.052, -0.055, 0.0], s: [0.05, -0.03, -0.17] },
+  rpg:     { fwd: 0.08, g: [0.052, -0.055, 0.02], s: [0.05, -0.042, -0.2] },
+  knife:   { fwd: 0.0, g: [0.032, -0.04, 0.02], s: null }
+};
+
+// First-person arms: sleeved forearms in the squad kit color with bare
+// hands, reaching from off-screen to the grip and the forend. They live
+// inside the viewmodel group, so every existing motion (sway, bob, kick,
+// the grenade-toss dip) animates them for free.
+function makeViewmodelArms(camo, hands) {
+  const arms = new THREE.Group();
+  const sleeveMat = new THREE.MeshPhongMaterial({ color: new THREE.Color(camo.cloth).multiplyScalar(1.15), specular: 0x2e2e2e, shininess: 18 });
+  const skinMat = new THREE.MeshPhongMaterial({ color: camo.skin, specular: 0x262626, shininess: 14 });
+  const limb = (from, to, r0, r1, mat) => {
+    const f = new THREE.Vector3(...from), t = new THREE.Vector3(...to);
+    const dir = new THREE.Vector3().subVectors(t, f);
+    const len = dir.length();
+    const m = new THREE.Mesh(new THREE.CylinderGeometry(r1, r0, len, 10), mat);
+    m.position.copy(f).addScaledVector(dir, 0.5);
+    m.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), dir.normalize());
+    return m;
+  };
+  const hand = (at, mat) => {
+    const h = new THREE.Mesh(new THREE.SphereGeometry(0.032, 10, 8), mat);
+    h.scale.set(1, 0.8, 1.25);
+    h.position.set(...at);
+    return h;
+  };
+  const g = hands.g;
+  // trigger arm comes up from the lower right, hand wraps the grip
+  arms.add(limb([0.17, -0.34, 0.28], [g[0] + 0.01, g[1] - 0.02, g[2] + 0.05], 0.05, 0.036, sleeveMat));
+  arms.add(hand(g, skinMat));
+  if (hands.s) {
+    const s = hands.s;
+    // support arm from the lower left, hand under the forend
+    arms.add(limb([-0.16, -0.38, 0.14], [s[0] - 0.01, s[1] - 0.025, s[2] + 0.06], 0.05, 0.034, sleeveMat));
+    arms.add(hand(s, skinMat));
+  }
+  return arms;
+}
 
 export function makeWeaponViewmodel(name, camo) {
   const m = makeWeaponMesh(name, camo);
   if (!m) return null;
   const g = new THREE.Group();
+  const hands = VM_HANDS[name] ?? VM_HANDS.rifle;
   m.rotation.y = Math.PI; // canonical barrel +Z -> camera forward -Z
   m.scale.setScalar(VM_SCALE[name] ?? 0.7);
+  m.position.z = -(hands.fwd ?? 0); // keep the stock off the near plane
   g.add(m);
+  g.add(makeViewmodelArms(camo, hands));
   return g;
 }
 

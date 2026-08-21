@@ -180,34 +180,30 @@ export function getGearGeometry(name) {
 // flat color. Canonical frame: barrel +Z, origin at the grip, metres.
 export function makeWeaponMesh(name, camo) {
   if (!template?.weapons?.[name]) return null;
-  const key = name + ':' + paletteKey(camo, true);
+  const key = name; // colors no longer vary by team
   let geom = template.weaponGeomCache.get(key);
   if (!geom) {
     const pos = template.gearSection(`weapon:${name}:p`, Float32Array);
     const nrm = template.gearSection(`weapon:${name}:n`, Int8Array);
     const idx = template.gearSection(`weapon:${name}:i`, Uint16Array);
     const slot = template.gearSection(`weapon:${name}:s`, Uint8Array);
-    const kitTone = (hex, f) => {
-      const c = new THREE.Color(hex).multiplyScalar(f);
-      c.getHSL(liftHsl);
-      c.setHSL(liftHsl.h, Math.min(1, liftHsl.s), Math.min(0.6, 0.12 + liftHsl.l));
-      return c;
-    };
+    // black-on-black hardware, matching the game's toy-soldier art style —
+    // parts alternate close dark tones so shape still reads without any
+    // realistic camo furniture
     const slotColors = [
-      new THREE.Color(0x2c2f34),   // largest part: gunmetal body
-      kitTone(camo.cloth, 0.78),   // furniture in the kit tone
-      new THREE.Color(0x1e2023),
-      kitTone(camo.vest ?? camo.cloth, 0.62),
-      new THREE.Color(0x35383d),
-      new THREE.Color(0x232528),
-      kitTone(camo.cloth, 0.55),
-      new THREE.Color(0x2a2c2f)
+      new THREE.Color(0x1e2126),
+      new THREE.Color(0x2b2e33),
+      new THREE.Color(0x16181b),
+      new THREE.Color(0x33363b),
+      new THREE.Color(0x212327),
+      new THREE.Color(0x191b1e),
+      new THREE.Color(0x282a2e),
+      new THREE.Color(0x1d1f22)
     ];
     if (name === 'knife') {
-      // blades are steel, not camo — only the grip keeps a dark kit accent
+      // blades are steel — only the grip stays dark
       slotColors[1] = new THREE.Color(0x9aa1a8);
       slotColors[3] = new THREE.Color(0x7c828a);
-      slotColors[6] = new THREE.Color(0x33363b);
     }
     const n = slot.length;
     const colors = new Uint8Array(n * 3);
@@ -226,8 +222,10 @@ export function makeWeaponMesh(name, camo) {
     geom.computeBoundingSphere();
     template.weaponGeomCache.set(key, geom);
   }
+  // same reflective response as the soldier bodies so weapons sit in the
+  // same material world instead of reading glossy-realistic
   const mesh = new THREE.Mesh(geom, new THREE.MeshPhongMaterial({
-    vertexColors: true, specular: 0x4a4a4a, shininess: 34
+    vertexColors: true, specular: 0x2e2e2e, shininess: 22
   }));
   mesh.castShadow = !IS_TOUCH;
   mesh.userData.muzzleZ = template.weapons[name].muzzleZ;
@@ -400,8 +398,8 @@ export function makeRiggedSoldier(camo, { rifle = true, mask = true, civilian = 
     const r = makeWeaponMesh('rifle', camo) ?? makeRifle();
     local.decompose(r.position, r.quaternion, r.scale);
     handR.add(r);
-    r.translateZ(0.14 / template.scale); // slide grip back into the palm
-    r.translateY(-0.03 / template.scale);
+    r.translateZ(0.05 / template.scale); // grip into the palm
+    r.translateY(0.05 / template.scale); // ride above the fists, clear of the chest
     muzzle.position.set(0, 0.01, r.userData.muzzleZ ?? 0.62);
     r.add(muzzle);
   } else {
