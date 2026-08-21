@@ -124,6 +124,15 @@ export class EnemyBot {
     }
     const s = Math.min(d, spd * dt);
     const base = Math.atan2(tmpV.x, tmpV.z);
+    if (!(ctx.isWalkable?.(p.x, p.z, 0.2) ?? true)) {
+      // stuck inside geometry (bad spawn the nudge couldn't fix): walk out
+      // unguarded toward the goal, which is open ground
+      p.x += (tmpV.x / d) * s;
+      p.z += (tmpV.z / d) * s;
+      slewYaw(this.group, base, dt, 8);
+      animateWalk(this.group, this.walkT, gait * this.temper.gait);
+      return false;
+    }
     for (const off of [0, 0.55, -0.55, 1.1, -1.1, 1.75, -1.75]) {
       const a = base + off;
       const sx = Math.sin(a), sz = Math.cos(a);
@@ -588,16 +597,25 @@ export class Comrade {
       const base = Math.atan2(tmpV.x, tmpV.z);
       const ahead = dist > 1.5 ? step + 0.5 : step;
       let advanced = false;
-      for (const off of [0, 0.6, -0.6, 1.2, -1.2]) {
-        const a = base + off;
-        const sx = Math.sin(a), sz = Math.cos(a);
-        if (walk(this.smooth.x + sx * step, this.smooth.z + sz * step) &&
-            walk(this.smooth.x + sx * ahead, this.smooth.z + sz * ahead)) {
-          this.smooth.x += sx * step;
-          this.smooth.z += sz * step;
-          slewYaw(this.group, a, dt, 9);
-          advanced = true;
-          break;
+      if (!(ctx.isWalkable?.(this.smooth.x, this.smooth.z, 0.2) ?? true)) {
+        // standing in an invalid spot (spawn placement can clip walls):
+        // walk out unguarded toward the goal, which is always open ground
+        this.smooth.x += tmpV.x * step;
+        this.smooth.z += tmpV.z * step;
+        slewYaw(this.group, base, dt, 9);
+        advanced = true;
+      } else {
+        for (const off of [0, 0.6, -0.6, 1.2, -1.2]) {
+          const a = base + off;
+          const sx = Math.sin(a), sz = Math.cos(a);
+          if (walk(this.smooth.x + sx * step, this.smooth.z + sz * step) &&
+              walk(this.smooth.x + sx * ahead, this.smooth.z + sz * ahead)) {
+            this.smooth.x += sx * step;
+            this.smooth.z += sz * step;
+            slewYaw(this.group, a, dt, 9);
+            advanced = true;
+            break;
+          }
         }
       }
       moving = advanced && step > dt * 0.7;
