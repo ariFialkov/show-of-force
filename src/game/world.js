@@ -1,8 +1,13 @@
 // Builds the themed 3D environment from a generated map + location env spec.
 
 import * as THREE from 'three';
+import { makeVegetation } from './props.js';
 
 const lambert = (color, opts = {}) => new THREE.MeshLambertMaterial({ color, ...opts });
+
+// baked-FBX vegetation per legacy prop name (falls back to the procedural
+// builders below when props.bin hasn't loaded)
+const VEG_KIND = { palm: 'palm', tree: 'leafy', pine: 'fir', fern: 'bush', cactus: 'cactus' };
 
 // --------------------------------------------------- procedural textures
 //
@@ -460,7 +465,7 @@ function makeKit(env) {
     ),
     tire: lambert(0x1c1e20),
     cardboard: lambert(0xa5885c),
-    paper: new THREE.MeshLambertMaterial({ color: 0xd8d2c2, side: THREE.DoubleSide }),
+    paper: new THREE.MeshLambertMaterial({ color: 0xb8b1a0, side: THREE.DoubleSide }),
     dark: lambert(0x24282c),
     steel: lambert(0x5a6066),
     pipe: map(metalTexture(0x555a5f, { rust: 0.8 })),
@@ -1473,6 +1478,10 @@ function makeMount(kind, K, env, rng, wallH) {
 // ---------------------------------------------- freestanding legacy props
 
 function makeProp(type, env, rng, K) {
+  if (VEG_KIND[type]) {
+    const veg = makeVegetation(VEG_KIND[type], rng, { scale: type === 'fern' ? 0.85 : 1 });
+    if (veg) return veg;
+  }
   const g = new THREE.Group();
   switch (type) {
     case 'palm': {

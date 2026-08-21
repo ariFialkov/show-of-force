@@ -9,7 +9,8 @@
     "build": "vite build",
     "preview": "vite preview",
     "icons": "node scripts/gen-icons.mjs",
-    "bake:trooper": "node scripts/bake-trooper.mjs"
+    "bake:trooper": "node scripts/bake-trooper.mjs",
+    "bake:props": "node scripts/bake-props.mjs"
   },
   "dependencies": {
     "three": "^0.166.0"

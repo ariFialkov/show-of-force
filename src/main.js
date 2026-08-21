@@ -249,7 +249,11 @@ import('./game/rigged.js').then(async ({ initRigged }) => {
   ui.els.deployingTitle.textContent = 'LOADING OPERATOR ASSETS…';
   ui.els.deployingCount.textContent = '▚';
   ui.els.deploying.classList.remove('hidden');
+  const propsP = import('./game/props.js')
+    .then((m) => m.initProps(import.meta.env.BASE_URL + 'models/props.bin'))
+    .catch(() => {});
   await initRigged(import.meta.env.BASE_URL + 'models/trooper.bin');
+  await propsP;
   ui.els.deploying.classList.add('hidden');
   enterLobby();
 });
