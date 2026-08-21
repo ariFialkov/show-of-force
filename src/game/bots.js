@@ -99,21 +99,45 @@ export class EnemyBot {
     }
   }
 
-  // Walk/run toward a point with axis-separated wall checks. Returns true
-  // when arrived (or hard-blocked, so callers never wall-hump).
+  // Walk/run toward a point, steering around walls: try the direct heading
+  // first, then progressively wider detour angles, taking the first clear
+  // one. Returns true when arrived, hard-blocked, or stuck (no progress),
+  // so callers never leave a soldier jogging into a wall.
   stepToward(goal, spd, dt, ctx, gait) {
     const p = this.group.position;
     tmpV.set(goal.x - p.x, 0, goal.z - p.z);
     const d = tmpV.length();
-    if (d < 0.22) return true;
-    tmpV.normalize();
+    const navKey = ((goal.x * 4) | 0) * 65536 + ((goal.z * 4) | 0);
+    if (navKey !== this.navKey) {
+      this.navKey = navKey;
+      this.navBest = Infinity;
+      this.navStuck = 0;
+    }
+    if (d < 0.25) return true;
+    // stuck watchdog: abandon goals that stop getting closer
+    if (d < this.navBest - 0.08) {
+      this.navBest = d;
+      this.navStuck = 0;
+    } else {
+      this.navStuck += dt;
+      if (this.navStuck > 1.4) return true;
+    }
     const s = Math.min(d, spd * dt);
-    let moved = false;
-    if (ctx.isWalkable?.(p.x + tmpV.x * s + Math.sign(tmpV.x) * 0.45, p.z) ?? true) { p.x += tmpV.x * s; moved = true; }
-    if (ctx.isWalkable?.(p.x, p.z + tmpV.z * s + Math.sign(tmpV.z) * 0.45) ?? true) { p.z += tmpV.z * s; moved = true; }
-    slewYaw(this.group, Math.atan2(tmpV.x, tmpV.z), dt, 8);
-    animateWalk(this.group, this.walkT, gait * this.temper.gait);
-    return !moved;
+    const base = Math.atan2(tmpV.x, tmpV.z);
+    for (const off of [0, 0.55, -0.55, 1.1, -1.1, 1.75, -1.75]) {
+      const a = base + off;
+      const sx = Math.sin(a), sz = Math.cos(a);
+      // look a stride ahead so we steer before touching the wall
+      if ((ctx.isWalkable?.(p.x + sx * (s + 0.55), p.z + sz * (s + 0.55)) ?? true) &&
+          (ctx.isWalkable?.(p.x + sx * s, p.z + sz * s) ?? true)) {
+        p.x += sx * s;
+        p.z += sz * s;
+        slewYaw(this.group, a, dt, 8);
+        animateWalk(this.group, this.walkT, gait * this.temper.gait);
+        return false;
+      }
+    }
+    return true; // boxed in — let the caller pick a new plan
   }
 
   // Find a nearby spot where the wall geometry actually blocks the player's
@@ -220,6 +244,20 @@ export class EnemyBot {
     }
 
     if (this.state === 'patrol') {
+      // one-time route audit: a patrol leg that clips through walls gets
+      // demoted to a stationary guard post instead of wall-ghosting
+      if (this.patrolTo && this.patrolChecked === undefined) {
+        this.patrolChecked = true;
+        for (let k = 0; k <= 5; k++) {
+          const t = k / 5;
+          const x = this.home.x + (this.patrolTo.x - this.home.x) * t;
+          const z = this.home.z + (this.patrolTo.z - this.home.z) * t;
+          if (!(ctx.isWalkable?.(x, z, 0.4) ?? true)) {
+            this.patrolTo = null;
+            break;
+          }
+        }
+      }
       if (this.patrolTo) {
         this.patrolT += dt * 0.14 * this.patrolDir;
         if (this.patrolT > 1) { this.patrolT = 1; this.patrolDir = -1; }
@@ -264,10 +302,9 @@ export class EnemyBot {
 
     if (this.mode === 'charge') {
       this.modeT -= dt;
-      if (this.modeT <= 0 || playerDist < 6.5) {
-        this.mode = 'fight';
+      if (this.modeT <= 0 || playerDist < 6.5 || this.stepToward(playerPos, 3.3, dt, ctx, 1.9)) {
+        this.mode = 'fight'; // arrived, blocked or timer out — fight from here
       } else {
-        this.stepToward(playerPos, 3.3, dt, ctx, 1.9);
         return;
       }
     }
@@ -319,12 +356,15 @@ export class EnemyBot {
       this.burstLeft = 0;
       if (!this.elevated && playerDist > 2.2) {
         // hunt on a flanking shoulder while far, close directly when near
+        let goal = playerPos;
         if (playerDist > 7) {
           const px = tmpV.x / playerDist, pz = tmpV.z / playerDist;
           tmpV2.set(playerPos.x + pz * 3.2 * this.flank, 0, playerPos.z - px * 3.2 * this.flank);
-          this.stepToward(tmpV2, 1.8, dt, ctx, 1.0);
-        } else {
-          this.stepToward(playerPos, 1.8, dt, ctx, 1.0);
+          if (ctx.isWalkable?.(tmpV2.x, tmpV2.z) ?? true) goal = tmpV2;
+        }
+        if (this.stepToward(goal, 1.8, dt, ctx, 1.0)) {
+          // boxed in or no progress — hold alert instead of wall-jogging
+          poseCombat(this.group, this.walkT);
         }
         return;
       }
@@ -483,9 +523,13 @@ export class Comrade {
       target = e;
     }
 
-    // personal formation point: staggered off the column line
+    // personal formation point: staggered off the column line — unless
+    // assigned a breach stack position beside a decision doorway
     let dx = targetPos.x, dz = targetPos.z;
-    if (!civ) {
+    if (ctx.stackPos && !civ) {
+      dx = ctx.stackPos.x;
+      dz = ctx.stackPos.z;
+    } else if (!civ) {
       const rx = -(-Math.cos(playerYaw)), rz = -Math.sin(playerYaw); // right of column
       dx += rx * this.temper.side;
       dz += rz * this.temper.side;
@@ -516,7 +560,12 @@ export class Comrade {
       const speed = THREE.MathUtils.clamp(1.6 + dist * 1.7, 0, 6.8) * this.temper.gait;
       const step = Math.min(dist, speed * dt);
       tmpV.normalize();
-      this.smooth.addScaledVector(tmpV, step);
+      // wall-guarded advance: full step, else slide along one axis
+      const nx = this.smooth.x + tmpV.x * step, nz = this.smooth.z + tmpV.z * step;
+      const walk = (x, z) => ctx.isWalkable?.(x, z, 0.35) ?? true;
+      if (walk(nx, nz)) this.smooth.set(nx, 0, nz);
+      else if (walk(nx, this.smooth.z)) this.smooth.x = nx;
+      else if (walk(this.smooth.x, nz)) this.smooth.z = nz;
       slewYaw(this.group, Math.atan2(tmpV.x, tmpV.z), dt, 9);
       moving = step > dt * 0.7;
       gait = speed / 1.9; // walk near formation, break into a run to catch up
@@ -587,6 +636,12 @@ export class Comrade {
       this.posted = false;
       this.walkT += dt * 1.4;
       animateWalk(this.group, this.walkT, gait);
+    } else if (ctx.stackPos && !civ && dist < 0.6) {
+      // stacked on the doorway: weapon up, covering through the entrance
+      this.posted = false;
+      this.walkT += dt * 0.25;
+      slewYaw(this.group, ctx.stackYaw ?? playerYaw + Math.PI, dt, 6);
+      poseCombat(this.group, this.walkT);
     } else if (!civ && (ctx.haltT ?? 0) > 1.1 + this.temper.delay) {
       // long halt: settle into a perimeter — each soldier owns a watch
       // sector and sweeps it, some take a knee, the rear man checks in on

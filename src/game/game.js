@@ -28,7 +28,7 @@ import { Controls, IS_TOUCH } from './controls.js';
 import { makeRng } from '../rng.js';
 
 const EYE = 1.55; // matches the (scaled) soldier models' eye line
-const PLAYER_RADIUS = 0.45;
+const PLAYER_RADIUS = 0.55;
 const WALK_SPEED = 4.6;
 const FIRE_INTERVAL = 1 / 7.5;
 const MAG_SIZE = 30;
@@ -333,6 +333,16 @@ export class Game {
     this.backupAmmo = BACKUPS[this.mission.team.backup].ammo;
     // weapon stays slung during the insertion ride; raised at the breach
     g.visible = false;
+    // classic FPS trick: the viewmodel ignores the depth buffer so the
+    // barrel never clips into walls when hugging cover
+    for (const vm of [g, backup]) {
+      vm.traverse((o) => {
+        if (o.isMesh) {
+          o.material.depthTest = false;
+          o.renderOrder = 500;
+        }
+      });
+    }
     this.scene.add(this.camera);
   }
 
@@ -556,6 +566,16 @@ export class Game {
     r.segTime = 0;
     r.segKills = 0;
     r.lethal = r.pendingBust;
+    // fresh column order each leg — soldiers trade places on the move
+    if (!first) {
+      this.playerSlot = Math.floor(Math.random() * 3);
+      const order = [0, 1, 2, 3].filter((s) => s !== this.playerSlot);
+      for (let i = order.length - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1));
+        [order[i], order[j]] = [order[j], order[i]];
+      }
+      this.comradeSlots = order;
+    }
     this.setupObjective(step);
     this.spawnLockedGates(step);
     const segEnemies = this.enemies.filter((e) => e.seg === step && e.alive);
@@ -864,9 +884,13 @@ export class Game {
     return {
       los: (a, b) => this.losClear(a, b),
       clip: (a, b) => this.clipPoint(a, b),
-      isWalkable: (x, z) => {
-        const c = this.map.cellAt(x, z);
-        return this.map.isCarved(c.x, c.z);
+      // radius-aware so bot bodies can't overlap walls half-way
+      isWalkable: (x, z, r = 0.4) => {
+        const ok = (px, pz) => {
+          const c = this.map.cellAt(px, pz);
+          return this.map.isCarved(c.x, c.z);
+        };
+        return ok(x, z) && ok(x + r, z) && ok(x - r, z) && ok(x, z + r) && ok(x, z - r);
       }
     };
   }
@@ -1352,9 +1376,12 @@ export class Game {
     };
     const tryAxis = (dx, dz) => {
       const nx = p.x + dx, nz = p.z + dz;
+      const rd = PLAYER_RADIUS * 0.71; // diagonal probes catch wall corners
       const pts = [
         [nx + PLAYER_RADIUS, nz], [nx - PLAYER_RADIUS, nz],
-        [nx, nz + PLAYER_RADIUS], [nx, nz - PLAYER_RADIUS]
+        [nx, nz + PLAYER_RADIUS], [nx, nz - PLAYER_RADIUS],
+        [nx + rd, nz + rd], [nx - rd, nz + rd],
+        [nx + rd, nz - rd], [nx - rd, nz - rd]
       ];
       for (const [px, pz] of pts) {
         if (solidAt(px, pz)) return false;
@@ -1665,7 +1692,7 @@ export class Game {
         gate.rotation.y = Math.atan2(roomPos.x - gate.position.x, roomPos.z - gate.position.z);
         this.scene.add(gate);
         gates.push(gate);
-        slots.push({ ...slot, cell });
+        slots.push({ ...slot, cell, dir: exits[i].dir });
       }
       this.gatePhase = { mode: 'doorways', gates, slots, t: 0 };
     } else {
@@ -1930,11 +1957,51 @@ export class Game {
     this.haltT = playerMoving || this.mode !== 'play' ? 0 : (this.haltT ?? 0) + dt;
     // watch sectors on halt: right flank, left flank, rear, forward
     const WATCH = [Math.PI * 0.55, -Math.PI * 0.55, Math.PI, 0.25];
+
+    // decision gates up: the two nearest comrades peel off and stack up on
+    // either side of the entrance the commander is walking toward, covering
+    // the breach until the choice is made
+    const stackByComrade = new Map();
+    const gp = this.gatePhase;
+    if (gp && this.comrades.length >= 2) {
+      const S = this.map.cellSize;
+      const pp = this.player.pos;
+      let best = null, bd = Infinity;
+      if (gp.mode === 'doorways') {
+        for (const s of gp.slots) {
+          if (!s.dir) continue;
+          const gx = s.cell.x * S, gz = s.cell.z * S;
+          const d = (pp.x - gx) ** 2 + (pp.z - gz) ** 2;
+          if (d < bd) { bd = d; best = { x: gx, z: gz, dir: s.dir }; }
+        }
+      } else if (gp.mid) {
+        best = { x: gp.mid.x, z: gp.mid.z, dir: { x: gp.h.x, z: gp.h.z } };
+      }
+      if (best) {
+        const walk = this.botCtxExtras().isWalkable;
+        const yaw = Math.atan2(best.dir.x, best.dir.z);
+        const bx = best.x - best.dir.x * 1.9, bz = best.z - best.dir.z * 1.9;
+        const mk = (side) => {
+          const sx = bx + best.dir.z * 1.5 * side, sz = bz - best.dir.x * 1.5 * side;
+          return walk(sx, sz, 0.35) ? { pos: new THREE.Vector3(sx, 0, sz), yaw } : null;
+        };
+        const stacks = [mk(1), mk(-1)].filter(Boolean);
+        const order = this.comrades.map((c, i) => ({ i, d: c.group.position.distanceToSquared(this.player.pos) }))
+          .sort((a, b) => a.d - b.d);
+        for (let k = 0; k < stacks.length && k < order.length; k++) {
+          stackByComrade.set(order[k].i, stacks[k]);
+        }
+      }
+    }
+
     for (let i = 0; i < this.comrades.length; i++) {
       const colOffset = this.comradeSlots[i] - this.playerSlot;
       const dist = Math.abs(colOffset) * COLUMN_SPACING + (colOffset > 0 ? 1.1 : 0);
       const targetPos = colOffset < 0 ? this.routeAheadPoint(dist) : this.trailBehindPoint(dist);
+      const stack = stackByComrade.get(i);
       this.comrades[i].update(dt, {
+        stackPos: stack?.pos ?? null,
+        stackYaw: stack?.yaw ?? 0,
         targetPos,
         playerYaw: this.controls.yaw,
         playerPos: this.player.pos,
