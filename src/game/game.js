@@ -1272,6 +1272,11 @@ export class Game {
   }
 
   registerKill(enemy, by) {
+    this.lastKillEvent = {
+      x: enemy.group.position.x,
+      z: enemy.group.position.z,
+      t: performance.now()
+    };
     const r = this.round;
     if (!r || r.over) return;
     if (enemy.seg === r.step) r.segKills++;
@@ -1810,6 +1815,17 @@ export class Game {
       effects: this.effects,
       lethal: false,
       onPlayerHit: (s) => this.applyPlayerHit(s),
+      // squadmate-down broadcast: nearby enemies visibly react
+      deathEvent: this.lastKillEvent,
+      // an engaged enemy pulls nearby patrols into the fight
+      callAllies: (src) => {
+        for (const o of this.enemies) {
+          if (o !== src && o.alive && o.state === 'patrol' && !o.stealthMode &&
+              o.group.position.distanceToSquared(src.group.position) < 196) {
+            o.engage();
+          }
+        }
+      },
       ...this.botCtxExtras()
     };
 
@@ -1908,9 +1924,12 @@ export class Game {
     // squad moves crouched while a stealth objective is live and unblown
     const o = this.objective;
     const sneaking = !!o && o.mech === 'stealth' && !o.done && !o.compromised;
-    for (let i = 0; i < this.comrades.length; i++) {
-      this.comrades[i].group.userData.crouched = sneaking;
-    }
+    // time since the commander last moved — the squad settles into a
+    // watching perimeter on long halts instead of freezing mid-stride
+    const playerMoving = Math.abs(this.controls.move.x) + Math.abs(this.controls.move.z) > 0.01;
+    this.haltT = playerMoving || this.mode !== 'play' ? 0 : (this.haltT ?? 0) + dt;
+    // watch sectors on halt: right flank, left flank, rear, forward
+    const WATCH = [Math.PI * 0.55, -Math.PI * 0.55, Math.PI, 0.25];
     for (let i = 0; i < this.comrades.length; i++) {
       const colOffset = this.comradeSlots[i] - this.playerSlot;
       const dist = Math.abs(colOffset) * COLUMN_SPACING + (colOffset > 0 ? 1.1 : 0);
@@ -1918,6 +1937,11 @@ export class Game {
       this.comrades[i].update(dt, {
         targetPos,
         playerYaw: this.controls.yaw,
+        playerPos: this.player.pos,
+        haltT: this.haltT,
+        sneaking,
+        watchYaw: this.controls.yaw + Math.PI + WATCH[i % WATCH.length],
+        facePlayer: i === this.comrades.length - 1,
         // comrades never touch the HVT — that kill belongs to the commander
         enemies: combat
           ? this.enemies.filter((e) => !e.isHVT && (e.seg === r.step || e.state === 'combat'))
@@ -1935,6 +1959,7 @@ export class Game {
       this.npc.update(dt, {
         targetPos: this.npcActive ? this.trailBehindPoint(behind) : this.npc.group.position.clone(),
         playerYaw: this.controls.yaw,
+        playerPos: this.player.pos,
         enemies: [],
         effects: this.effects,
         graceElapsed: false,

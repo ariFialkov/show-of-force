@@ -27,6 +27,22 @@ function slewYaw(group, target, dt, rate = 7) {
   group.rotation.y += Math.max(-rate * dt, Math.min(rate * dt, d));
 }
 
+// Per-soldier personality so nobody behaves identically or in lockstep:
+// reaction latency, gait speed, formation stagger, halt posture, how they
+// scan a sector, and whether they answer contact with aggression or cover.
+function makeTemper() {
+  return {
+    delay: 0.12 + Math.random() * 0.55,
+    gait: 0.9 + Math.random() * 0.2,
+    side: (Math.random() < 0.5 ? -1 : 1) * (0.45 + Math.random() * 0.85),
+    kneels: Math.random() < 0.45,
+    scanRate: 0.35 + Math.random() * 0.55,
+    scanPhase: Math.random() * 10,
+    scanWidth: 0.3 + Math.random() * 0.4,
+    brave: Math.random() < 0.4
+  };
+}
+
 export class EnemyBot {
   constructor(scene, pos, patrolTo, seg, opts = {}) {
     this.id = nextBotId++;
@@ -54,6 +70,19 @@ export class EnemyBot {
     this.reloadT = 0;
     this.deathT = 0;
     this.walkT = Math.random() * 10;
+
+    // combat personality + tactical state
+    this.temper = makeTemper();
+    this.mode = 'fight'; // fight | charge | tuck | peek | fallback
+    this.modeT = 0;
+    this.combatT = 0;
+    this.calledHelp = false;
+    this.coverSearched = false;
+    this.fellBack = false;
+    this.reactedKill = 0;
+    this.flank = Math.random() < 0.5 ? -1 : 1;
+    this.strafeT = 2 + Math.random() * 4;
+    this.strafeGoal = null;
   }
 
   get alive() { return this.state === 'patrol' || this.state === 'combat'; }
@@ -62,7 +91,54 @@ export class EnemyBot {
     if (this.state === 'patrol') {
       this.state = 'combat';
       this.fireTimer = 0.4 + Math.random() * 1.2;
+      // aggressive types open with a rush; the rest fight from where they are
+      if (this.temper.brave && !this.elevated) {
+        this.mode = 'charge';
+        this.modeT = 2 + Math.random() * 1.2;
+      }
     }
+  }
+
+  // Walk/run toward a point with axis-separated wall checks. Returns true
+  // when arrived (or hard-blocked, so callers never wall-hump).
+  stepToward(goal, spd, dt, ctx, gait) {
+    const p = this.group.position;
+    tmpV.set(goal.x - p.x, 0, goal.z - p.z);
+    const d = tmpV.length();
+    if (d < 0.22) return true;
+    tmpV.normalize();
+    const s = Math.min(d, spd * dt);
+    let moved = false;
+    if (ctx.isWalkable?.(p.x + tmpV.x * s + Math.sign(tmpV.x) * 0.45, p.z) ?? true) { p.x += tmpV.x * s; moved = true; }
+    if (ctx.isWalkable?.(p.x, p.z + tmpV.z * s + Math.sign(tmpV.z) * 0.45) ?? true) { p.z += tmpV.z * s; moved = true; }
+    slewYaw(this.group, Math.atan2(tmpV.x, tmpV.z), dt, 8);
+    animateWalk(this.group, this.walkT, gait * this.temper.gait);
+    return !moved;
+  }
+
+  // Find a nearby spot where the wall geometry actually blocks the player's
+  // line of sight — real cover, not a scripted point. Searches outward in
+  // rings, never picking a spot that closes distance on the player.
+  findCover(ctx, playerPos) {
+    if (!ctx.los) return false;
+    const p = this.group.position;
+    const dPlayer = Math.hypot(playerPos.x - p.x, playerPos.z - p.z);
+    for (let ring = 0; ring < 3; ring++) {
+      for (let k = 0; k < 10; k++) {
+        const a = (k / 10) * Math.PI * 2 + Math.random() * 0.5;
+        const r = 1.3 + ring * 1.6 + Math.random() * 1.4;
+        const x = p.x + Math.sin(a) * r, z = p.z + Math.cos(a) * r;
+        if (!(ctx.isWalkable?.(x, z) ?? true)) continue;
+        if (Math.hypot(playerPos.x - x, playerPos.z - z) < Math.min(dPlayer, 3.5)) continue;
+        tmpV.set(x, 1.45, z);
+        if (!ctx.los(tmpV, playerPos)) {
+          this.tuckPos = new THREE.Vector3(x, 0, z);
+          this.peekPos = p.clone();
+          return true;
+        }
+      }
+    }
+    return false;
   }
 
   // blastFrom (optional, explosion kills): the blast center — the body is
@@ -126,6 +202,23 @@ export class EnemyBot {
       return;
     }
 
+    // squadmate went down nearby: patrols snap to combat, cautious fighters
+    // scatter for (new) cover, aggressive ones answer with a rush.
+    // Unaware stealth-objective targets stay oblivious for game balance.
+    const dk = ctx.deathEvent;
+    if (dk && dk.t !== this.reactedKill && !this.stealthMode &&
+        performance.now() - dk.t < 900) {
+      const ddx = this.group.position.x - dk.x, ddz = this.group.position.z - dk.z;
+      if (ddx * ddx + ddz * ddz < 144) {
+        this.reactedKill = dk.t;
+        if (this.state === 'patrol') this.engage();
+        else if (!this.elevated) {
+          if (this.temper.brave) { this.mode = 'charge'; this.modeT = 1.8 + Math.random(); }
+          else { this.mode = 'fight'; this.coverSearched = false; this.tuckPos = null; }
+        }
+      }
+    }
+
     if (this.state === 'patrol') {
       if (this.patrolTo) {
         this.patrolT += dt * 0.14 * this.patrolDir;
@@ -136,7 +229,7 @@ export class EnemyBot {
         if (tmpV.lengthSq() > 0.001) {
           slewYaw(this.group, Math.atan2(tmpV.x, tmpV.z), dt, 4.5);
         }
-        animateWalk(this.group, this.walkT, 0.6);
+        animateWalk(this.group, this.walkT, 0.6 * this.temper.gait);
       } else {
         poseIdle(this.group, this.walkT);
         this.group.rotation.y += Math.sin(this.walkT * 0.4) * dt * 0.3;
@@ -144,38 +237,141 @@ export class EnemyBot {
       return;
     }
 
-    // combat: fire only with a clear line of sight; hunt the player's
-    // position otherwise instead of blind-firing through walls
+    // ---- combat
+    this.group.userData.crouched = false;
+    this.combatT += dt;
+    if (!this.calledHelp && this.combatT > 1.8) {
+      this.calledHelp = true;
+      ctx.callAllies?.(this);
+    }
+
     const eye = tmpV2.copy(this.group.position);
     eye.y += 1.5;
     const canSee = ctx.los ? ctx.los(eye, playerPos) : true;
+    tmpV.subVectors(playerPos, this.group.position);
+    tmpV.y = 0;
+    const playerDist = tmpV.length();
 
+    // wounded and pressed: cautious fighters break contact once, regroup
+    if (this.hp === 1 && !this.temper.brave && !this.elevated && !this.fellBack &&
+        this.mode !== 'fallback' && playerDist < 9) {
+      this.fellBack = true;
+      tmpV.normalize();
+      this.fbGoal = this.group.position.clone().addScaledVector(tmpV, -5.5);
+      this.mode = 'fallback';
+      this.modeT = 3.2;
+    }
+
+    if (this.mode === 'charge') {
+      this.modeT -= dt;
+      if (this.modeT <= 0 || playerDist < 6.5) {
+        this.mode = 'fight';
+      } else {
+        this.stepToward(playerPos, 3.3, dt, ctx, 1.9);
+        return;
+      }
+    }
+
+    if (this.mode === 'fallback') {
+      this.modeT -= dt;
+      const done = this.stepToward(this.fbGoal, 2.7, dt, ctx, 1.5);
+      if (done || this.modeT <= 0) {
+        this.mode = 'fight';
+        this.coverSearched = false;
+      } else return;
+    }
+
+    // point-blank pressure breaks the cover cycle
+    if ((this.mode === 'tuck' || this.mode === 'peek') && playerDist < 3.5) {
+      this.mode = 'fight';
+      this.tuckPos = null;
+    }
+
+    if (this.mode === 'tuck') {
+      if (this.stepToward(this.tuckPos, 2.4, dt, ctx, 1.3)) {
+        this.group.userData.crouched = true;
+        tmpV.subVectors(playerPos, this.group.position);
+        slewYaw(this.group, Math.atan2(tmpV.x, tmpV.z), dt, 6);
+        poseIdle(this.group, this.walkT); // crouched via flag
+        this.modeT -= dt; // dwell starts once actually behind cover
+      }
+      if (this.modeT <= 0) {
+        this.mode = 'peek';
+        this.modeT = 1.3 + Math.random() * 1.4;
+      }
+      return;
+    }
+
+    if (this.mode === 'peek') {
+      if (this.stepToward(this.peekPos, 2.6, dt, ctx, 1.4)) {
+        this.engageFire(dt, canSee, playerPos, ctx);
+        this.modeT -= dt;
+      }
+      if (this.modeT <= 0 && this.tuckPos) {
+        this.mode = 'tuck';
+        this.modeT = 1.6 + Math.random() * 1.8;
+      }
+      return;
+    }
+
+    // ---- default stand-up fight
     if (!canSee) {
       this.burstLeft = 0;
-      if (!this.elevated) {
-        // advance toward the player, axis-separated so walls stop us
-        tmpV.subVectors(playerPos, this.group.position);
-        tmpV.y = 0;
-        const d = tmpV.length();
-        if (d > 2.2) {
-          tmpV.normalize();
-          const spd = 1.7 * dt;
-          const p = this.group.position;
-          if (ctx.isWalkable?.(p.x + tmpV.x * spd + Math.sign(tmpV.x) * 0.5, p.z) ?? true) p.x += tmpV.x * spd;
-          if (ctx.isWalkable?.(p.x, p.z + tmpV.z * spd + Math.sign(tmpV.z) * 0.5) ?? true) p.z += tmpV.z * spd;
-          slewYaw(this.group, Math.atan2(tmpV.x, tmpV.z), dt, 8);
-          animateWalk(this.group, this.walkT, 0.8);
-          return;
+      if (!this.elevated && playerDist > 2.2) {
+        // hunt on a flanking shoulder while far, close directly when near
+        if (playerDist > 7) {
+          const px = tmpV.x / playerDist, pz = tmpV.z / playerDist;
+          tmpV2.set(playerPos.x + pz * 3.2 * this.flank, 0, playerPos.z - px * 3.2 * this.flank);
+          this.stepToward(tmpV2, 1.8, dt, ctx, 1.0);
+        } else {
+          this.stepToward(playerPos, 1.8, dt, ctx, 1.0);
         }
+        return;
       }
       poseCombat(this.group, this.walkT); // alert, weapon up, no target
       return;
     }
 
+    // first clear sight: cautious fighters dive for real cover
+    if (!this.coverSearched && !this.elevated) {
+      this.coverSearched = true;
+      if (!this.temper.brave && this.findCover(ctx, playerPos)) {
+        this.mode = 'tuck';
+        this.modeT = 1 + Math.random();
+        return;
+      }
+    }
+
+    // occasional lateral reposition so firefights don't look pinned
+    if (!this.elevated) {
+      this.strafeT -= dt;
+      if (this.strafeT <= 0) {
+        this.strafeT = 2.6 + Math.random() * 3.4;
+        const a = Math.random() * Math.PI * 2;
+        const x = this.group.position.x + Math.sin(a) * 1.3;
+        const z = this.group.position.z + Math.cos(a) * 1.3;
+        if (ctx.isWalkable?.(x, z) ?? true) this.strafeGoal = new THREE.Vector3(x, 0, z);
+      }
+      if (this.strafeGoal) {
+        if (this.stepToward(this.strafeGoal, 1.7, dt, ctx, 0.9)) this.strafeGoal = null;
+        return;
+      }
+    }
+
+    this.engageFire(dt, canSee, playerPos, ctx);
+  }
+
+  // Aim at the player and run the burst/reload cycle (LOS-gated).
+  engageFire(dt, canSee, playerPos, ctx) {
+    const { effects, lethal, onPlayerHit } = ctx;
     tmpV.subVectors(playerPos, this.group.position);
     slewYaw(this.group, Math.atan2(tmpV.x, tmpV.z), dt, 10);
     if (this.burstLeft > 0) poseFire(this.group, this.walkT);
     else poseCombat(this.group, this.walkT);
+    if (!canSee) {
+      this.burstLeft = 0;
+      return;
+    }
 
     // mid-magazine change: weapon down, no shooting until it finishes
     if (this.reloadT > 0) {
@@ -244,18 +440,30 @@ export class Comrade {
     this.shotsFired = Math.floor(Math.random() * 4); // desync squad reloads
     this.smooth = new THREE.Vector3();
     this.initialized = false;
+    this.temper = makeTemper();
+    this.adopted = new THREE.Vector3();
+    this.reactT = 0;
+    this.posted = false;
+    this.kneel = false;
+    this.strafeT = 3 + Math.random() * 4;
+    this.strafeGoal = null;
   }
 
-  // Column movement: seek an assigned column point (computed by the game —
-  // ahead of the commander along the mission route, or behind along the
-  // commander's own trail), stopping to trade fire when enemies are up.
+  // Formation movement: seek an assigned column point (computed by the game
+  // — ahead of the commander along the mission route, or behind along the
+  // commander's own trail) with a personal lateral stagger and reaction
+  // latency, settle into a watching perimeter on long halts, and stop to
+  // trade fire when enemies are up.
   update(dt, ctx) {
     const { targetPos, playerYaw, enemies, effects, graceElapsed, onComradeKill } = ctx;
+    const civ = !!this.group.userData.civilian;
+    const sneaking = !!ctx.sneaking;
 
     this.group.userData.tick?.(dt); // rigged models advance their idle clip
 
     if (!this.initialized) {
       this.smooth.copy(targetPos);
+      this.adopted.copy(targetPos);
       this.initialized = true;
     }
 
@@ -275,14 +483,37 @@ export class Comrade {
       target = e;
     }
 
-    tmpV.subVectors(targetPos, this.smooth);
+    // personal formation point: staggered off the column line
+    let dx = targetPos.x, dz = targetPos.z;
+    if (!civ) {
+      const rx = -(-Math.cos(playerYaw)), rz = -Math.sin(playerYaw); // right of column
+      dx += rx * this.temper.side;
+      dz += rz * this.temper.side;
+      if (!(ctx.isWalkable?.(dx, dz) ?? true)) { dx = targetPos.x; dz = targetPos.z; }
+    }
+    // reaction latency: a parked soldier takes a personal beat to set off;
+    // once in motion they track the column continuously
+    const parked = this.smooth.distanceToSquared(this.adopted) < 0.09;
+    const goalMoved = (dx - this.adopted.x) ** 2 + (dz - this.adopted.z) ** 2 > 0.36;
+    if (goalMoved && parked) {
+      this.reactT += dt;
+      if (this.reactT >= this.temper.delay) {
+        this.adopted.set(dx, 0, dz);
+        this.reactT = 0;
+      }
+    } else {
+      this.adopted.set(dx, 0, dz);
+      if (!goalMoved) this.reactT = 0;
+    }
+
+    tmpV.subVectors(this.adopted, this.smooth);
     tmpV.y = 0;
     const dist = tmpV.length();
     const holdForFight = target !== null && dist < 7;
     let moving = false;
     let gait = 1;
     if (!holdForFight && dist > 0.22) {
-      const speed = THREE.MathUtils.clamp(1.6 + dist * 1.7, 0, 6.8);
+      const speed = THREE.MathUtils.clamp(1.6 + dist * 1.7, 0, 6.8) * this.temper.gait;
       const step = Math.min(dist, speed * dt);
       tmpV.normalize();
       this.smooth.addScaledVector(tmpV, step);
@@ -291,12 +522,39 @@ export class Comrade {
       gait = speed / 1.9; // walk near formation, break into a run to catch up
     }
     this.group.position.copy(this.smooth);
+    this.group.userData.crouched = sneaking;
 
     if (target) {
+      this.posted = false;
+      // work the angle: occasional short side-steps while engaged
+      let strafing = false;
+      if (!sneaking) {
+        this.strafeT -= dt;
+        if (this.strafeT <= 0) {
+          this.strafeT = 3.5 + Math.random() * 3;
+          const a = Math.random() * Math.PI * 2;
+          const sx = this.smooth.x + Math.sin(a) * 1.2;
+          const sz = this.smooth.z + Math.cos(a) * 1.2;
+          if (ctx.isWalkable?.(sx, sz) ?? true) this.strafeGoal = new THREE.Vector3(sx, 0, sz);
+        }
+        if (this.strafeGoal) {
+          tmpV.subVectors(this.strafeGoal, this.smooth);
+          tmpV.y = 0;
+          const sd = tmpV.length();
+          if (sd < 0.2) this.strafeGoal = null;
+          else {
+            tmpV.normalize();
+            this.smooth.addScaledVector(tmpV, Math.min(sd, 1.6 * dt));
+            this.group.position.copy(this.smooth);
+            strafing = true;
+          }
+        }
+      }
       tmpV2.subVectors(target.group.position, this.group.position);
       slewYaw(this.group, Math.atan2(tmpV2.x, tmpV2.z), dt, 10);
       this.fireAnimT -= dt;
-      if (this.fireAnimT > 0) poseFire(this.group, this.walkT);
+      if (strafing) animateWalk(this.group, this.walkT, 1);
+      else if (this.fireAnimT > 0) poseFire(this.group, this.walkT);
       else poseCombat(this.group, this.walkT);
       this.killTimer -= dt;
       if (this.killTimer <= 0) {
@@ -326,13 +584,36 @@ export class Comrade {
         }
       }
     } else if (moving) {
+      this.posted = false;
       this.walkT += dt * 1.4;
       animateWalk(this.group, this.walkT, gait);
+    } else if (!civ && (ctx.haltT ?? 0) > 1.1 + this.temper.delay) {
+      // long halt: settle into a perimeter — each soldier owns a watch
+      // sector and sweeps it, some take a knee, the rear man checks in on
+      // the commander. Nobody mirrors the player's aim anymore.
+      if (!this.posted) {
+        this.posted = true;
+        this.kneel = this.temper.kneels;
+      }
+      this.walkT += dt * 0.25;
+      let watch;
+      if (ctx.facePlayer && ctx.playerPos) {
+        watch = Math.atan2(ctx.playerPos.x - this.group.position.x, ctx.playerPos.z - this.group.position.z);
+      } else {
+        const scan = Math.sin(this.walkT * 4 * this.temper.scanRate + this.temper.scanPhase) * this.temper.scanWidth;
+        watch = (ctx.watchYaw ?? playerYaw + Math.PI) + scan;
+      }
+      slewYaw(this.group, watch, dt, 3.2);
+      this.group.userData.crouched = sneaking || this.kneel;
+      poseIdle(this.group, this.walkT * 4);
     } else {
+      // brief pause: hold whatever way we were facing, no synced snapping
+      this.posted = false;
       this.walkT += dt * 0.25;
       poseIdle(this.group, this.walkT * 4);
-      // hold facing the commander's heading (models face +Z; camera yaw 0 faces -Z)
-      slewYaw(this.group, playerYaw + Math.PI, dt, 5);
+      if (civ && ctx.playerPos) {
+        slewYaw(this.group, Math.atan2(ctx.playerPos.x - this.group.position.x, ctx.playerPos.z - this.group.position.z), dt, 4);
+      }
     }
   }
 
