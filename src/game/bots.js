@@ -219,6 +219,28 @@ export class EnemyBot {
 
     this.group.userData.tick?.(dt); // rigged models advance their idle clip
 
+    // one-time spawn audit: a soldier placed overlapping a wall (random
+    // spawn offsets can do this) nudges to the nearest open ground
+    if (!this.spawnFixed) {
+      this.spawnFixed = true;
+      const p = this.group.position;
+      if (!(ctx.isWalkable?.(p.x, p.z, 0.35) ?? true)) {
+        outer:
+        for (const r of [0.6, 1.1, 1.7, 2.4]) {
+          for (let k = 0; k < 8; k++) {
+            const a = (k / 8) * Math.PI * 2;
+            const nx = p.x + Math.sin(a) * r, nz = p.z + Math.cos(a) * r;
+            if (ctx.isWalkable?.(nx, nz, 0.35) ?? true) {
+              p.set(nx, p.y, nz);
+              this.home.copy(p);
+              this.patrolTo = null; // guard post at the corrected spot
+              break outer;
+            }
+          }
+        }
+      }
+    }
+
     // flash-stunned: dazed in place, can't fight
     if (this.stunT > 0) {
       this.stunT -= dt;
