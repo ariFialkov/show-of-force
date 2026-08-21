@@ -238,7 +238,7 @@ export function makeCivilian(shirtColor = 0x7a6a4a) {
 // bot's — no separate viewmodel rig to keep in sync.
 const VM_EYE = 1.5;
 const VM_BODY_SCALE = 0.88;   // slightly reduced: real-scale hands at 30cm read as giant
-const VM_DROP = 0.15;         // camera rides above the shoulders so the weapon sits low
+const VM_DROP = 0.21;         // camera rides above the shoulders so the weapon sits low
 const VM_FWD = 0.16;          // body pushed forward so hands are at arm's length
 
 export function makeRiggedViewmodel(camo, weapon, headgear = null) {

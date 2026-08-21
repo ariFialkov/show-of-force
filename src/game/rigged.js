@@ -461,7 +461,7 @@ export function makeRiggedSoldier(camo, { rifle = true, mask = true, civilian = 
       r.quaternion.premultiply(new THREE.Quaternion().copy(handQ).invert().multiply(fix).multiply(handQ));
     };
     alignWeapon();
-    r.translateZ(0.17 / template.scale); // carried forward of the fists
+    r.translateZ(0.32 / template.scale); // carried well forward of the fists
     r.translateY(0.05 / template.scale); // ride above the fists, clear of the chest
     if (armsOnly) {
       // the held weapon rides over the world with the arms
