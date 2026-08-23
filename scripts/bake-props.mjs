@@ -452,6 +452,55 @@ const variantsByKind = {};
   variantsByKind.fountain = [v];
 }
 
+// ------------------------------------------- objective set-pieces
+{
+  console.log('objectives:');
+  // AA gun — long quad-barrel cannon, olive drab
+  {
+    const obj = loadFbx('assets-src/props/aa.fbx');
+    const v = bakeVariant('aa0', meshesOf(obj), (m) => tint(0x4f5638, m.name, 0.05), 3200);
+    scaleVariant(v, 280 / (v.radius * 2)); // ~2.8m cannon; the runtime mounts it
+    variantsByKind.aa = [v];
+  }
+  // mortar + ammo, gunmetal tube / olive shells
+  {
+    const obj = loadFbx('assets-src/props/mortar.fbx');
+    const colorFor = (m) => {
+      const mats = Array.isArray(m.material) ? m.material : [m.material];
+      return tint((mats[0]?.name ?? '').includes('phong') ? 0x6f6534 : 0x42463e, m.name, 0.04);
+    };
+    const v = bakeVariant('mortar0', meshesOf(obj), colorFor, 3000);
+    scaleVariant(v, 265 / (v.radius * 2));
+    variantsByKind.mortar = [v];
+  }
+  // diesel generator, olive drab
+  {
+    const obj = loadFbx('assets-src/props/generator.fbx');
+    const v = bakeVariant('generator0', meshesOf(obj), (m) => tint(0x565c40, m.name, 0.03), 2600);
+    scaleVariant(v, 115 / v.height);
+    variantsByKind.generator = [v];
+  }
+  // satellite uplink dish, pale gray
+  {
+    const obj = loadFbx('assets-src/props/satdish.obj');
+    const v = bakeVariant('comms0', meshesOf(obj), (m) => tint(0xb4b8bc, m.name, 0.02), 2800);
+    scaleVariant(v, 235 / v.height);
+    variantsByKind.comms = [v];
+  }
+  // weapons crate — the runtime stacks a few into a cache
+  {
+    const obj = loadFbx('assets-src/props/cache.fbx');
+    const CRATE = { Wood: 0x71603c, Metal_1: 0x43484c, Metal_2: 0x2e3236, Decal: 0x933227 };
+    const colorFor = (m, mi) => {
+      const mats = Array.isArray(m.material) ? m.material : [m.material];
+      return tint(CRATE[mats[mi]?.name] ?? 0x71603c, m.name + mi, 0.03);
+    };
+    const v = bakeVariant('cache0', meshesOf(obj), colorFor, 2400);
+    scaleVariant(v, 1.08);
+    variantsByKind.cache = [v];
+  }
+}
+
 // ------------------------------------------------------- convert cm → m
 for (const kind of Object.keys(variantsByKind)) {
   for (const v of variantsByKind[kind]) scaleVariant(v, 0.01);

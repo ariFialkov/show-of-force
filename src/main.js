@@ -20,7 +20,7 @@ const game = new Game(document.getElementById('gl'), {
 
 // debugging hooks (harmless in production; used by automated smoke tests)
 window.__game = game;
-import('./game/models.js').then((m) => { window.__makeSoldier = m.makeSoldier; });
+import('./game/models.js').then((m) => { window.__makeSoldier = m.makeSoldier; window.__models = m; });
 import('./game/rigged.js').then((m) => { window.__rigged = m; });
 window.__forceLocation = (id) => {
   clearTimeout(rotationTimer);

@@ -3,6 +3,7 @@
 
 import * as THREE from 'three';
 import { riggedReady, makeRiggedSoldier, riggedWalk, riggedIdle, riggedDeath, riggedHit, riggedAim, riggedFire, riggedStun, riggedReload, riggedSit, makeWeaponMesh } from './rigged.js';
+import { makeVegetation } from './props.js';
 
 const mat = (color, opts = {}) => new THREE.MeshLambertMaterial({ color, ...opts });
 
@@ -510,8 +511,50 @@ export function makeGate(text, { risk = 'std', pct = null, pay = null, width = 4
 
 // ------------------------------------------------------- objective props
 
-// Destructible / interactable objective targets.
+// Baked objective set-pieces. The cache is a stack of the baked weapons
+// crate; the rest map straight onto their props.bin kind.
+function makeBakedObjective(kind) {
+  if (kind === 'cache') {
+    const a = makeVegetation('cache');
+    if (!a) return null;
+    const g = new THREE.Group();
+    const h = a.userData.vegHeight;
+    g.add(a);
+    const b = makeVegetation('cache');
+    b.position.set(0.16, h * 0.98, 0.08);
+    b.rotation.y = 0.42;
+    const c = makeVegetation('cache');
+    c.position.set(-1.02, 0, 0.55);
+    c.rotation.y = -0.55;
+    g.add(b, c);
+    return g;
+  }
+  if (kind === 'aa') {
+    // the cannon asset is bare — emplace it: pedestal + pivot, barrel up
+    const gun = makeVegetation('aa');
+    if (!gun) return null;
+    const g = new THREE.Group();
+    const base = new THREE.Mesh(new THREE.CylinderGeometry(0.55, 0.72, 0.36, 10), mat(0x3a3f36));
+    base.position.y = 0.18;
+    const pivot = box(0.36, 0.55, 0.36, 0x2f342c);
+    pivot.position.y = 0.6;
+    g.add(base, pivot);
+    gun.position.y = 0.88;
+    gun.rotation.z = 0.52; // barrel runs +x — tip the muzzle skyward
+    g.add(gun);
+    return g;
+  }
+  if (kind === 'comms' || kind === 'generator' || kind === 'mortar') {
+    return makeVegetation(kind);
+  }
+  return null;
+}
+
+// Destructible / interactable objective targets. Baked set-piece assets
+// (props.bin) are preferred; the primitive builders below are the fallback.
 export function makeObjectiveProp(kind) {
+  const baked = makeBakedObjective(kind);
+  if (baked) return baked;
   const g = new THREE.Group();
   switch (kind) {
     case 'cache': {
