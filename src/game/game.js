@@ -1111,14 +1111,14 @@ export class Game {
       let node = destrHits[0].object;
       while (node && !node.userData.destructibleRef) node = node.parent;
       const d = node?.userData.destructibleRef;
-      this.effects.hitSpark(end);
+      this.effects.impact(end);
       if (d && d.alive) {
         d.hp -= 1;
         if (d.hp <= 0) this.destroyDestructible(d, 'player');
       }
     } else if (wallHit) {
       end = wallHit.point;
-      this.effects.hitSpark(end);
+      this.effects.impact(end);
     } else {
       end = muzzle.clone().addScaledVector(dir, 90);
     }
@@ -1171,10 +1171,10 @@ export class Game {
           while (node && !node.userData.destructibleRef) node = node.parent;
           const dd = node?.userData.destructibleRef;
           if (dd?.alive && (dd.hp -= 1) <= 0) this.destroyDestructible(dd, 'player');
-          this.effects.hitSpark(end);
+          this.effects.impact(end);
         } else if (wallHit) {
           end = wallHit.point;
-          this.effects.hitSpark(end);
+          this.effects.impact(end);
         } else {
           end = camPos.clone().addScaledVector(d, 45);
         }
@@ -1681,11 +1681,24 @@ export class Game {
       this.cb.onHealth?.(this.player.health);
     }
 
-    // bust-step pressure: enemies hunting the player will usually earn
-    // line-of-sight quickly; this fallback covers a player who camps out
-    // of sight so the scripted bust can never stall forever
-    if (r.lethal && r.segTime > 7 && Math.random() < dt * 0.8) {
-      this.applyPlayerHit(0.6);
+    // bust-step pressure: every death must come from a visible soldier and
+    // his gunfire — never sourceless chip damage. If the hunt stalls, feed
+    // in reinforcements that enter the scene naturally (spawned out of the
+    // player's sight, charging in); late waves come in behind the player so
+    // there is nowhere left to camp.
+    if (r.lethal) {
+      r.bustPressureT = (r.bustPressureT ?? 0) + dt;
+      if (r.segTime > 5 && r.bustPressureT > 6) {
+        r.bustPressureT = 0;
+        const hunters = this.enemies.filter((e) => e.alive && e.seg === r.step).length;
+        if (hunters < 6) {
+          r.bustWaves = (r.bustWaves ?? 0) + 1;
+          const behind = r.bustWaves >= 3;
+          if (!this.spawnBustReinforcements(2, behind)) {
+            this.spawnBustReinforcements(2, !behind);
+          }
+        }
+      }
     }
 
     // reaching the decision room — trigger from ANY cell of the 3x3 room.
@@ -1696,8 +1709,14 @@ export class Game {
       const pc = this.map.cellAt(playerPos.x, playerPos.z);
       if (Math.abs(pc.x - roomCell.x) <= 1 && Math.abs(pc.z - roomCell.z) <= 1) {
         if (r.lethal) {
-          // ambushed at the threshold — the round was always ending here
-          this.applyPlayerHit(1.4);
+          // ambushed at the threshold — the round was always ending here,
+          // but the trap springs as soldiers pouring in, not unseen hits
+          if (!r.bustAmbushed) {
+            r.bustAmbushed = true;
+            const got = this.spawnBustReinforcements(3, false) ||
+              this.spawnBustReinforcements(2, true);
+            if (!got) this.applyPlayerHit(1.4); // absolute last resort
+          }
         } else if (o && !o.done && o.mech !== 'hold') {
           o.stallT += dt;
           o.hintT -= dt;
@@ -1712,6 +1731,58 @@ export class Game {
         }
       }
     }
+  }
+
+  // Reinforcements for the scripted bust: spawned where the player can't
+  // see them (LOS-blocked segment cells, or directly behind the camera's
+  // back for late waves) and set charging so they enter the scene as
+  // soldiers arriving, not as damage from nowhere.
+  spawnBustReinforcements(count = 2, behind = false) {
+    const r = this.round;
+    if (!r) return 0;
+    const S = this.map.cellSize;
+    const eye = this.camera.position.clone();
+    const walkable = this.botCtxExtras().isWalkable;
+    const spots = [];
+    if (behind) {
+      const back = new THREE.Vector3(0, 0, 1).applyQuaternion(this.camera.quaternion);
+      back.y = 0;
+      back.normalize();
+      for (let i = 0; i < count; i++) {
+        for (const d of [6, 8, 4.5]) {
+          const px = eye.x + back.x * d + (Math.random() - 0.5) * 2.4;
+          const pz = eye.z + back.z * d + (Math.random() - 0.5) * 2.4;
+          if (!walkable(px, pz, 0.45)) continue;
+          spots.push(new THREE.Vector3(px, 0, pz));
+          break;
+        }
+      }
+    } else {
+      const cells = this.map.path.filter((p) => p.seg === r.step || p.seg === r.step + 1);
+      const shuffled = [...cells].sort(() => Math.random() - 0.5);
+      for (const c of shuffled) {
+        if (spots.length >= count) break;
+        const pos = new THREE.Vector3(
+          c.x * S + (Math.random() - 0.5) * 2.4, 0, c.z * S + (Math.random() - 0.5) * 2.4
+        );
+        const d = Math.hypot(pos.x - eye.x, pos.z - eye.z);
+        if (d < 8 || d > 42) continue;
+        if (this.losClear(eye, pos.clone().setY(1.4))) continue; // must be hidden
+        if (!walkable(pos.x, pos.z, 0.45)) continue;
+        spots.push(pos);
+      }
+    }
+    for (const pos of spots) {
+      const e = new EnemyBot(this.scene, pos, null, r.step, { weapon: this.enemyWeapon(0.1) });
+      e.engage();
+      e.temper.brave = true;
+      e.mode = 'charge';
+      e.modeT = 6 + Math.random() * 3;
+      this.enemies.push(e);
+      r.segEnemyTotal++;
+    }
+    if (spots.length > 0) sound.alarm();
+    return spots.length;
   }
 
   spawnHoldWave(step, room) {

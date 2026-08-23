@@ -58,6 +58,18 @@ export async function initRigged(url) {
       clips[c.name] = new THREE.AnimationClip(c.name, c.duration, tracks);
     }
 
+    // upper-body-only reload: the source clip's legs are static, which looks
+    // wrong on a moving bot — a track-filtered variant drives only the torso
+    // and arms so it can layer OVER walk/run (legs keep their locomotion)
+    if (clips.reload) {
+      const LOWER = ['Hips', 'LeftUpLeg', 'LeftLeg', 'LeftFoot', 'LeftToeBase', 'RightUpLeg', 'RightLeg', 'RightFoot', 'RightToeBase'];
+      const upperTracks = clips.reload.tracks.filter((t) => {
+        const node = t.name.split('.')[0];
+        return !LOWER.some((b) => node.endsWith(b));
+      });
+      clips['reload-upper'] = new THREE.AnimationClip('reload-upper', clips.reload.duration, upperTracks);
+    }
+
     // bind pose is a T-pose, so derive height from the head bone, not the
     // arm-inflated bbox (head bone to crown ≈ 3.4 units on this export)
     const height = (header.headY + 3.4) - header.minY;
@@ -419,7 +431,30 @@ export function makeRiggedSoldier(camo, { rifle = true, mask = true, civilian = 
     rigState.current = name;
     return true;
   };
-  mixer?.addEventListener('finished', () => { rigState.busy = false; });
+  // Overlay channel: a one-shot clip whose tracks cover only part of the
+  // skeleton (e.g. reload-upper) layered on top of the base action — the
+  // base keeps driving whatever bones the overlay doesn't touch.
+  const playOverlay = (name, { fade = 0.12, timeScale = 1 } = {}) => {
+    const a = actions[name];
+    if (!a || rigState.overlay) return 0;
+    a.reset();
+    a.setLoop(THREE.LoopOnce, 1);
+    a.clampWhenFinished = true;
+    a.timeScale = timeScale;
+    a.setEffectiveWeight(1);
+    a.fadeIn(fade);
+    a.play();
+    rigState.overlay = name;
+    return a.getClip().duration / timeScale;
+  };
+  mixer?.addEventListener('finished', (e) => {
+    if (rigState.overlay && e.action === actions[rigState.overlay]) {
+      e.action.fadeOut(0.18);
+      rigState.overlay = null;
+    } else {
+      rigState.busy = false;
+    }
+  });
 
   // rifle spanning the hands: grip at the right hand, barrel aimed at the
   // left hand (the idle clip holds a two-handed low-ready pose)
@@ -483,8 +518,11 @@ export function makeRiggedSoldier(camo, { rifle = true, mask = true, civilian = 
     };
     alignWeapon();
     for (const w of held) {
-      w.translateZ(0.32 / template.scale); // carried well forward of the fists
-      w.translateY(0.05 / template.scale); // ride above the fists, clear of the chest
+      // carried well forward of the fists and riding above them; the
+      // first-person viewmodel pushes further out and up so the barrel
+      // clears the support hand on camera
+      w.translateZ((armsOnly ? 0.48 : 0.32) / template.scale);
+      w.translateY((armsOnly ? 0.14 : 0.05) / template.scale);
     }
     if (armsOnly) {
       // the held weapon rides over the world with the arms
@@ -546,7 +584,7 @@ export function makeRiggedSoldier(camo, { rifle = true, mask = true, civilian = 
     if (b) rest[k] = { q: b.quaternion.clone(), p: b.position.clone() };
   }
 
-  outer.userData.rig = { ...rig, rest, mixer, actions, play, state: rigState, alignWeapon, swapWeapon };
+  outer.userData.rig = { ...rig, rest, mixer, actions, play, playOverlay, state: rigState, alignWeapon, swapWeapon };
   outer.userData.tick = (dt) => { mixer?.update(dt); };
   outer.userData.parts = {
     legL: rig.legL, legR: rig.legR, armL: rig.armL, armR: rig.armR,
@@ -619,9 +657,17 @@ export function riggedDeath(soldier, cause = 'gunfire') {
 }
 
 // One-shot magazine change: weapon lowered, bot can't fire until it ends.
+// While the bot is in a locomotion clip the reload runs as an upper-body
+// overlay so the legs keep walking/running underneath it.
 export function riggedReload(soldier) {
   const r = soldier.userData.rig;
   if (!r?.play || !template?.clips.reload) return 0;
+  const moving = r.state.current === 'walk' || r.state.current === 'run' ||
+    r.state.current === 'crouch-walk' || r.state.current === 'unarmed-run';
+  if (moving && r.playOverlay && r.actions['reload-upper']) {
+    const d = r.playOverlay('reload-upper', { fade: 0.12 });
+    if (d > 0) return d;
+  }
   if (!r.play('reload', { fade: 0.14, once: true })) return 0;
   return template.clips.reload.duration;
 }

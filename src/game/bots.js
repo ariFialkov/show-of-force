@@ -495,7 +495,12 @@ export class EnemyBot {
       target.addScaledVector(side, miss);
       target.y += (Math.random() - 0.35) * 1.2;
     }
+    const rawTarget = target.clone();
     if (clip) target = clip(from, target); // rounds stop at solid cover
+    // rounds that struck a wall kick up dust and chips at the impact point
+    if (target.distanceToSquared(rawTarget) > 0.05 && Math.random() < 0.6) {
+      effects.impact(target);
+    }
     effects.tracer(from, target, false);
     effects.muzzleFlash(from, new THREE.Vector3().subVectors(target, from).normalize());
     sound.enemyShot();
