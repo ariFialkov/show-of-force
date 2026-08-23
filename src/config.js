@@ -76,7 +76,7 @@ export const LOCATIONS = {
       sky: 0xd7b98a, fog: 0xcfae7d, fogDensity: 0.016, ground: 0xc2a06a,
       wall: 0xa8834f, wallAlt: 0x8f6d40, building: 0xb08c55, sun: 0xffe0b0,
       sunIntensity: 1.25, hemi: 0xead9b0, hemiGround: 0x8a6f45,
-      props: ['market', 'market', 'laundry', 'camp', 'junk', 'power', 'palm', 'crate', 'awning', 'rock'],
+      props: ['market', 'market', 'laundry', 'camp', 'junk', 'power', 'palm', 'crate', 'awning', 'rock', 'barrier', 'debris'],
       mounts: ['ac', 'poster', 'pipe', 'vent'], wires: true, pennants: true, night: false
     }
   },
@@ -87,7 +87,7 @@ export const LOCATIONS = {
       sky: 0xe8c9a0, fog: 0xdcb98d, fogDensity: 0.02, ground: 0xd4b078,
       wall: 0xbb9257, wallAlt: 0xa07b48, building: 0xc09a60, sun: 0xfff0cc,
       sunIntensity: 1.35, hemi: 0xf2e2bb, hemiGround: 0x9c7c4e,
-      props: ['camp', 'defense', 'junk', 'power', 'rock', 'palm', 'dune', 'crate'],
+      props: ['camp', 'defense', 'junk', 'power', 'rock', 'palm', 'dune', 'crate', 'barrier'],
       mounts: ['pipe', 'vent', 'ac'], night: false
     }
   },
@@ -98,7 +98,7 @@ export const LOCATIONS = {
       sky: 0x9fb8c4, fog: 0x93aab6, fogDensity: 0.02, ground: 0x8b8271,
       wall: 0x7d8a8a, wallAlt: 0x6a7574, building: 0x94847a, sun: 0xfff4dd,
       sunIntensity: 1.0, hemi: 0xcfdce2, hemiGround: 0x6f6a5a,
-      props: ['dock', 'dock', 'junk', 'laundry', 'fence', 'power', 'container', 'barrel', 'palm'],
+      props: ['dock', 'dock', 'junk', 'laundry', 'fence', 'power', 'container', 'barrel', 'palm', 'barrier', 'debris'],
       mounts: ['ac', 'pipe', 'poster', 'vent'], wires: true, water: true, night: false
     }
   },
@@ -109,7 +109,7 @@ export const LOCATIONS = {
       sky: 0x6d7f8e, fog: 0x64707c, fogDensity: 0.028, ground: 0x5e6a6e,
       wall: 0x707a80, wallAlt: 0x5c666c, building: 0x8a9096, sun: 0xcfe0ee,
       sunIntensity: 0.7, hemi: 0x9fb2c0, hemiGround: 0x46505a,
-      props: ['garden', 'garden', 'fence', 'camp', 'statue', 'lamp', 'hedge', 'junk'],
+      props: ['garden', 'garden', 'fence', 'camp', 'statue', 'lamp', 'hedge', 'junk', 'fountain'],
       mounts: ['sconce', 'pipe', 'vent'], water: true, night: true
     }
   },
@@ -131,7 +131,7 @@ export const LOCATIONS = {
       sky: 0x7d9070, fog: 0x6f855f, fogDensity: 0.03, ground: 0x45552e,
       wall: 0x55663a, wallAlt: 0x42522e, building: 0x64553c, sun: 0xf2ecc8,
       sunIntensity: 0.85, hemi: 0xa8bd90, hemiGround: 0x33421f,
-      props: ['defense', 'camp', 'camp', 'junk', 'tent', 'barrel', 'tree', 'fence'],
+      props: ['defense', 'camp', 'camp', 'junk', 'tent', 'barrel', 'tree', 'fence', 'debris'],
       mounts: ['vine', 'pipe', 'vent'], night: false
     }
   },
@@ -142,7 +142,7 @@ export const LOCATIONS = {
       sky: 0xb9c9d8, fog: 0xaebfcf, fogDensity: 0.018, ground: 0x8f9aa2,
       wall: 0x7a838c, wallAlt: 0x656e78, building: 0x9aa4ab, sun: 0xffffff,
       sunIntensity: 1.15, hemi: 0xd7e4ef, hemiGround: 0x6b7680,
-      props: ['defense', 'camp', 'junk', 'power', 'pine', 'rock', 'antenna', 'crate'],
+      props: ['defense', 'camp', 'junk', 'power', 'pine', 'rock', 'antenna', 'crate', 'barrier'],
       mounts: ['pipe', 'vent'], snow: true, night: false
     }
   },
@@ -153,7 +153,7 @@ export const LOCATIONS = {
       sky: 0xc4b49a, fog: 0xb3a289, fogDensity: 0.02, ground: 0x99805c,
       wall: 0x86704c, wallAlt: 0x715d3e, building: 0x8d7752, sun: 0xffeecb,
       sunIntensity: 1.1, hemi: 0xd9c9a8, hemiGround: 0x6e5b3e,
-      props: ['defense', 'camp', 'junk', 'rock', 'tent', 'antenna', 'crate', 'dune'],
+      props: ['defense', 'camp', 'junk', 'rock', 'tent', 'antenna', 'crate', 'dune', 'debris', 'debris'],
       mounts: ['pipe', 'vent'], night: false
     }
   },
@@ -164,7 +164,7 @@ export const LOCATIONS = {
       sky: 0xd9b48a, fog: 0xc9a67e, fogDensity: 0.017, ground: 0xb08c5c,
       wall: 0xa3794a, wallAlt: 0x8c6740, building: 0xb5885a, sun: 0xffd9a8,
       sunIntensity: 1.2, hemi: 0xe8d3ac, hemiGround: 0x82633c,
-      props: ['market', 'junk', 'laundry', 'power', 'fence', 'cactus', 'barrel', 'awning'],
+      props: ['market', 'junk', 'laundry', 'power', 'fence', 'cactus', 'barrel', 'awning', 'barrier'],
       mounts: ['poster', 'ac', 'pipe', 'vent'], wires: true, pennants: true, night: false
     }
   },
@@ -175,7 +175,7 @@ export const LOCATIONS = {
       sky: 0x93a87e, fog: 0x869c72, fogDensity: 0.026, ground: 0x59683a,
       wall: 0x6a7a44, wallAlt: 0x556338, building: 0x7d6b4a, sun: 0xf5eecd,
       sunIntensity: 0.9, hemi: 0xbccaa0, hemiGround: 0x42502a,
-      props: ['camp', 'junk', 'fence', 'power', 'tree', 'fern', 'hut', 'barrel'],
+      props: ['camp', 'junk', 'fence', 'power', 'tree', 'fern', 'hut', 'barrel', 'statue', 'fountain'],
       mounts: ['vine', 'pipe', 'vent'], night: false
     }
   }

@@ -5,9 +5,13 @@ import { makeVegetation } from './props.js';
 
 const lambert = (color, opts = {}) => new THREE.MeshLambertMaterial({ color, ...opts });
 
-// baked-FBX vegetation per legacy prop name (falls back to the procedural
-// builders below when props.bin hasn't loaded)
-const VEG_KIND = { palm: 'palm', tree: 'leafy', pine: 'fir', fern: 'bush', cactus: 'cactus' };
+// baked-FBX asset per prop name: [kind in props.bin, placement scale].
+// Falls back to the procedural builders below when props.bin hasn't loaded.
+const BAKED_KIND = {
+  palm: ['palm', 1], tree: ['leafy', 1], pine: ['fir', 1], fern: ['bush', 0.85],
+  cactus: ['cactus', 1], rock: ['debris', 0.55], statue: ['statue', 1],
+  barrier: ['barrier', 1], debris: ['debris', 1], fountain: ['fountain', 1]
+};
 
 // --------------------------------------------------- procedural textures
 //
@@ -937,15 +941,32 @@ function dressWorld(group, map, env, rng, K, edges, wallH) {
     if (v.userData.litter) sprinkle(px, pz, v.userData.litter);
   }
 
-  // ---- legacy freestanding props (vegetation, rocks, tents, huts…)
-  if (legacyNames.length > 0) {
+  // ---- fountain: a wide centerpiece, so it gets an interior room cell
+  // (never a route cell — the squad shouldn't walk through it)
+  if (list.includes('fountain')) {
+    const pathSet = new Set(map.path.map((p) => `${p.x},${p.z}`));
+    const interior = cellsInfo.filter((c) => c.dirs.length === 0 && !pathSet.has(c.key));
+    if (interior.length > 0) {
+      const c = rng.pick(interior);
+      const f = makeProp('fountain', env, rng, K);
+      if (f) {
+        f.position.set(c.x * S + rng.range(-0.5, 0.5), 0, c.z * S + rng.range(-0.5, 0.5));
+        f.rotation.y = rng.range(0, Math.PI * 2);
+        group.add(f);
+      }
+    }
+  }
+
+  // ---- legacy freestanding props (vegetation, rubble, statues, tents…)
+  const scatterNames = legacyNames.filter((t) => t !== 'fountain');
+  if (scatterNames.length > 0) {
     const cells = [...map.carved];
     const n = Math.min(36, Math.floor(cells.length * 0.4));
     for (let i = 0; i < n; i++) {
       const c = rng.pick(cells);
       if (skip.has(c)) continue;
       const [x, z] = c.split(',').map(Number);
-      const type = rng.pick(legacyNames);
+      const type = rng.pick(scatterNames);
       const prop = makeProp(type, env, rng, K);
       if (!prop) continue;
       // hug corridor edges so the lane stays walkable
@@ -1116,32 +1137,48 @@ function vCamp(K, env, rng) {
 
 function vDefense(K, env, rng) {
   const g = new THREE.Group();
-  // sandbag emplacement: two staggered courses in a shallow arc
-  const rows = [[0, 0.19, 5], [0.5, 0.5, 4]];
-  let total = 0;
-  for (const r of rows) total += r[2];
-  const bags = new THREE.InstancedMesh(K.bagGeo, K.sandbag, total + 2);
-  const dummy = new THREE.Object3D();
-  let bi = 0;
-  for (const [stagger, y, count] of rows) {
-    for (let i = 0; i < count; i++) {
-      const t = (i - (count - 1) / 2) * 0.62 + stagger * 0.3;
-      dummy.position.set(t, y, 0.5 + Math.abs(t) * -0.12 + rng.range(-0.03, 0.03));
-      dummy.rotation.set(rng.range(-0.06, 0.06), rng.range(-0.25, 0.25), rng.range(-0.06, 0.06));
-      dummy.scale.set(1.35, 0.62, 0.95);
-      dummy.updateMatrix();
-      bags.setMatrixAt(bi++, dummy.matrix);
+  // sandbag emplacement: baked wall sections turned to face the lane
+  const wall = makeVegetation('sandbag', rng);
+  if (wall) {
+    // the merged wall's long axis varies per shape — lay it across the lane
+    const geo = wall.children[0].geometry;
+    geo.computeBoundingBox();
+    const s = geo.boundingBox.getSize(new THREE.Vector3());
+    if (s.z > s.x) wall.rotation.y = Math.PI / 2;
+    wall.position.set(rng.range(-0.3, 0.3), 0, 0.55);
+    g.add(wall);
+    if (rng.chance(0.45)) {
+      const wall2 = makeVegetation('sandbag', rng, { scale: 0.9 });
+      if (wall2) {
+        const geo2 = wall2.children[0].geometry;
+        geo2.computeBoundingBox();
+        const s2 = geo2.boundingBox.getSize(new THREE.Vector3());
+        if (s2.z > s2.x) wall2.rotation.y = Math.PI / 2;
+        wall2.rotation.y += rng.range(0.5, 0.9);
+        wall2.position.set(rng.chance(0.5) ? -2.1 : 2.1, 0, 0.8);
+        g.add(wall2);
+      }
     }
+  } else {
+    // fallback: instanced bag arc (props.bin unavailable)
+    const rows = [[0, 0.19, 5], [0.5, 0.5, 4]];
+    let total = 0;
+    for (const r of rows) total += r[2];
+    const bags = new THREE.InstancedMesh(K.bagGeo, K.sandbag, total);
+    const dummy = new THREE.Object3D();
+    let bi = 0;
+    for (const [stagger, y, count] of rows) {
+      for (let i = 0; i < count; i++) {
+        const t = (i - (count - 1) / 2) * 0.62 + stagger * 0.3;
+        dummy.position.set(t, y, 0.5 + Math.abs(t) * -0.12 + rng.range(-0.03, 0.03));
+        dummy.rotation.set(rng.range(-0.06, 0.06), rng.range(-0.25, 0.25), rng.range(-0.06, 0.06));
+        dummy.scale.set(1.35, 0.62, 0.95);
+        dummy.updateMatrix();
+        bags.setMatrixAt(bi++, dummy.matrix);
+      }
+    }
+    g.add(bags);
   }
-  // a couple of loose bags dropped beside
-  for (const [x, z] of [[-1.9, 0.7], [1.85, 0.4]]) {
-    dummy.position.set(x, 0.14, z);
-    dummy.rotation.set(0, rng.range(0, 3), 0.12);
-    dummy.scale.set(1.3, 0.55, 0.9);
-    dummy.updateMatrix();
-    bags.setMatrixAt(bi++, dummy.matrix);
-  }
-  g.add(bags);
   // ammo crate + tin
   const ammo = box(0.7, 0.4, 0.42, K.darkWood);
   ammo.position.set(0.9, 0.2, 1.05);
@@ -1250,14 +1287,21 @@ function vJunk(K, env, rng) {
     cb.rotation.z = rng.range(-0.08, 0.08);
     g.add(cb);
   }
-  // rubble shards against the wall base
-  for (let i = 0; i < 5; i++) {
-    const s = new THREE.Mesh(K.shardGeo, K.rock);
-    s.position.set(rng.range(-1.6, 1.7), 0.07, rng.range(0.0, 0.35));
-    s.scale.setScalar(rng.range(0.5, 1.5));
-    s.scale.y *= 0.6;
-    s.rotation.y = rng.range(0, 3);
-    g.add(s);
+  // rubble against the wall base: a small baked debris pile
+  const pile = makeVegetation('debris', rng, { scale: 0.42 });
+  if (pile) {
+    pile.position.set(rng.range(-1.2, 1.4), 0, 0.3);
+    pile.rotation.y = rng.range(0, Math.PI * 2);
+    g.add(pile);
+  } else {
+    for (let i = 0; i < 5; i++) {
+      const s = new THREE.Mesh(K.shardGeo, K.rock);
+      s.position.set(rng.range(-1.6, 1.7), 0.07, rng.range(0.0, 0.35));
+      s.scale.setScalar(rng.range(0.5, 1.5));
+      s.scale.y *= 0.6;
+      s.rotation.y = rng.range(0, 3);
+      g.add(s);
+    }
   }
   g.userData.stainR = 0.9;
   g.userData.litter = 4;
@@ -1478,9 +1522,10 @@ function makeMount(kind, K, env, rng, wallH) {
 // ---------------------------------------------- freestanding legacy props
 
 function makeProp(type, env, rng, K) {
-  if (VEG_KIND[type]) {
-    const veg = makeVegetation(VEG_KIND[type], rng, { scale: type === 'fern' ? 0.85 : 1 });
-    if (veg) return veg;
+  if (BAKED_KIND[type]) {
+    const [kind, scale] = BAKED_KIND[type];
+    const baked = makeVegetation(kind, rng, { scale });
+    if (baked) return baked;
   }
   const g = new THREE.Group();
   switch (type) {

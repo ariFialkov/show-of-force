@@ -16,6 +16,7 @@ globalThis.document = { createElementNS: fakeEl, createElement: fakeEl };
 import fs from 'node:fs';
 const THREE = await import('three');
 const { FBXLoader } = await import('three/examples/jsm/loaders/FBXLoader.js');
+const { OBJLoader } = await import('three/examples/jsm/loaders/OBJLoader.js');
 const { MeshoptSimplifier } = await import('meshoptimizer');
 
 const OUT = 'public/models/props.bin';
@@ -32,7 +33,9 @@ const CACTUS = 0x4c7a3c;
 
 function loadFbx(file) {
   const buf = fs.readFileSync(file);
-  const obj = new FBXLoader().parse(buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength), '');
+  const obj = file.endsWith('.obj')
+    ? new OBJLoader().parse(buf.toString('utf8'))
+    : new FBXLoader().parse(buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength), '');
   obj.updateMatrixWorld(true);
   return obj;
 }
@@ -60,7 +63,9 @@ function tint(hex, seedStr, amount = 0.05) {
 
 // Gather one variant's meshes into flat triangle soup with per-vertex colours.
 // colorFor(mesh, materialIndex) -> THREE.Color
-function soup(meshes, colorFor) {
+// `unit` converts the source's units to cm BEFORE welding — the 0.5cm weld
+// grid destroys metre-unit sources otherwise.
+function soup(meshes, colorFor, unit = 1) {
   const pos = [], col = [];
   const v = new THREE.Vector3();
   for (const mesh of meshes) {
@@ -74,7 +79,7 @@ function soup(meshes, colorFor) {
       const end = grp.start + grp.count;
       for (let i = grp.start; i < end; i++) {
         const vi = idx ? idx.getX(i) : i;
-        v.fromBufferAttribute(p, vi).applyMatrix4(mesh.matrixWorld);
+        v.fromBufferAttribute(p, vi).applyMatrix4(mesh.matrixWorld).multiplyScalar(unit);
         pos.push(v.x, v.y, v.z);
         col.push(c.r, c.g, c.b);
       }
@@ -168,8 +173,8 @@ function finalizeVariant(name, parts, srcTris = null) {
 }
 
 // One-call pipeline for regular packs.
-function bakeVariant(name, meshes, colorFor, targetTris, err = 0.08, allowSloppy = true) {
-  const part = weldSimplify(soup(meshes, colorFor), targetTris, err, allowSloppy);
+function bakeVariant(name, meshes, colorFor, targetTris, err = 0.08, allowSloppy = true, unit = 1) {
+  const part = weldSimplify(soup(meshes, colorFor, unit), targetTris, err, allowSloppy);
   return finalizeVariant(name, [part], part.srcTris);
 }
 
@@ -306,6 +311,145 @@ const variantsByKind = {};
   const maxH = Math.max(...out.map((v) => v.height));
   for (const v of out) scaleVariant(v, 240 / maxH);
   variantsByKind.cactus = out;
+}
+
+// --------------------------------------------------------------- barriers
+{
+  console.log('barriers:');
+  const obj = loadFbx('assets-src/props/barriers.obj');
+  // one scene, uniform scale: the standard jersey barrier (4.6 units tall)
+  // maps to 1.1m, which sizes every other item plausibly
+  const SCALE = 24;
+  const COLORS = {
+    warning_sing: 0xc9a542, warning_sign_back: 0xc9a542,
+    wall_barrier: 0xb2ac9e, wall_barrier_painted: 0xa8a294,
+    stick: 0xb5584a,
+    short_barrier: 0xb2ac9e, short_barrier_painted: 0xaba590, short_barrier_signed: 0xb2ac9e,
+    'None.002': 0xb2ac9e, // pyramid block
+    fenced_barrier: 0x8a9094,
+    None: 0xd2622e, 'None.001': 0xd2622e, 'None.003': 0xd2622e, 'None.004': 0xd2622e, // cones
+    barrier: 0xb8b2a4, barrier_painted: 0xb2544c
+  };
+  const out = [];
+  for (const mesh of meshesOf(obj)) {
+    if (mesh.name === 'fence') continue; // 2-tri backdrop quad, not a prop
+    const colorFor = (m, mi) => {
+      const mats = Array.isArray(m.material) ? m.material : [m.material];
+      return tint(COLORS[mats[mi]?.name] ?? 0xb2ac9e, m.name, 0.04);
+    };
+    const v = bakeVariant(`barrier:${mesh.name.slice(0, 24)}`, [mesh], colorFor, 900, 0.08, true, SCALE);
+    out.push(v);
+  }
+  variantsByKind.barrier = out;
+}
+
+// ---------------------------------------------------------------- debris
+{
+  console.log('debris:');
+  const obj = loadFbx('assets-src/props/debris.fbx');
+  const DEBRIS_COLORS = {
+    brick2: 0x9a8f80, stone1: 0x8a8272, plank1: 0x7c6248,
+    stick1: 0x6b5638, aiStandardSurface1: 0xa8a49a, Default_Material: 0x8f8a7e
+  };
+  // curated top-level groups: each is a ready-made rubble pile; the
+  // sprawling showcase rows (group1/6/26) are skipped
+  // group2 (stacked concrete pipes) reads as construction, not rubble —
+  // it joins the barrier kind instead
+  const PILES = ['group3', 'group10', 'group11', 'group14', 'group19', 'group29', 'group18', 'group28', 'group31'];
+  const out = [];
+  for (const name of ['group2']) {
+    const root = obj.children.find((c) => c.name === name);
+    if (!root) continue;
+    const v = bakeVariant('barrier:pipes', meshesOf(root), () => tint(0xa8a49a, name, 0.05), 1600, 0.08, true, 18);
+    scaleVariant(v, Math.min(260 / (v.radius * 2), 170 / v.height));
+    variantsByKind.barrier.push(v);
+  }
+  for (const name of PILES) {
+    const root = obj.children.find((c) => c.name === name);
+    if (!root) continue;
+    const meshes = meshesOf(root);
+    const colorFor = (m, mi) => {
+      const mats = Array.isArray(m.material) ? m.material : [m.material];
+      return tint(DEBRIS_COLORS[mats[mi]?.name] ?? 0x8f8a7e, m.name, 0.06);
+    };
+    const v = bakeVariant(`debris:${name}`, meshes, colorFor, 1600, 0.08, true, 18);
+    // normalize footprint to ~2.6m, but never taller than 1.8m
+    const foot = v.radius * 2;
+    scaleVariant(v, Math.min(260 / foot, 180 / v.height));
+    out.push(v);
+  }
+  variantsByKind.debris = out;
+}
+
+// --------------------------------------------------------- sandbag walls
+{
+  console.log('sandbags:');
+  const obj = loadFbx('assets-src/props/sandbags.fbx');
+  const meshes = meshesOf(obj);
+  const KHAKI = 0x9a8a64;
+  // the source bags are open thin shells (2.5k tris each) that shred under
+  // decimation — rebuild each bag as an oriented plump blob instead, keeping
+  // the pack's exact stacking layout
+  const ico = new THREE.IcosahedronGeometry(1, 1); // 80 faces, reads as a stuffed bag
+  const ip = ico.attributes.position;
+  const bagSoup = (group, unit) => {
+    const pos = [], col = [];
+    const v = new THREE.Vector3();
+    for (const mesh of group) {
+      mesh.geometry.computeBoundingBox();
+      const bb = mesh.geometry.boundingBox;
+      const ctr = bb.getCenter(new THREE.Vector3());
+      const half = bb.getSize(new THREE.Vector3()).multiplyScalar(0.5 * 0.96);
+      const tc = tint(KHAKI, mesh.name, 0.07);
+      for (let i = 0; i < ip.count; i++) {
+        v.set(ip.getX(i) * half.x + ctr.x, ip.getY(i) * half.y + ctr.y, ip.getZ(i) * half.z + ctr.z)
+          .applyMatrix4(mesh.matrixWorld)
+          .multiplyScalar(unit);
+        pos.push(v.x, v.y, v.z);
+        col.push(tc.r, tc.g, tc.b);
+      }
+    }
+    return { pos, col };
+  };
+  const out = [];
+  for (const shape of ['straight', 'round', 'corner']) {
+    const group = meshes.filter((m) => m.name.includes(`_${shape}_`));
+    if (group.length === 0) continue;
+    const part = weldSimplify(bagSoup(group, 100), Infinity);
+    const v = finalizeVariant(`sandbag:${shape}`, [part], part.srcTris);
+    scaleVariant(v, 1.3); // chest-high cover
+    out.push(v);
+  }
+  variantsByKind.sandbag = out;
+}
+
+// ---------------------------------------------------------------- statues
+{
+  console.log('statues:');
+  const obj = loadFbx('assets-src/props/statues.fbx');
+  const STONE = 0x9aa0a4, BRONZE = 0x6e6a4e;
+  const out = [];
+  for (const mesh of meshesOf(obj)) {
+    const hex = mesh.name.includes('bull') || mesh.name.includes('lion') ? BRONZE : STONE;
+    const v = bakeVariant(`statue:${mesh.name}`, [mesh], (m) => tint(hex, m.name, 0.03), 2800, 0.08, true, 5);
+    scaleVariant(v, 230 / v.height);
+    out.push(v);
+  }
+  variantsByKind.statue = out;
+}
+
+// --------------------------------------------------------------- fountain
+{
+  console.log('fountain:');
+  const obj = loadFbx('assets-src/props/fountain.fbx');
+  const meshes = meshesOf(obj);
+  const colorFor = (m, mi) => {
+    const mats = Array.isArray(m.material) ? m.material : [m.material];
+    return tint((mats[mi]?.name ?? '').includes('Water') ? 0x7ab2c4 : 0x8d9296, m.name, 0.02);
+  };
+  const v = bakeVariant('fountain0', meshes, colorFor, 4200);
+  scaleVariant(v, 300 / (v.radius * 2)); // ~3m basin so it fits a lane edge
+  variantsByKind.fountain = [v];
 }
 
 // ------------------------------------------------------- convert cm → m

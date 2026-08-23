@@ -55,5 +55,6 @@ export function makeVegetation(kind, rng, { scale = 1 } = {}) {
   const g = new THREE.Group();
   g.add(mesh);
   g.userData.vegHeight = v.height * s;
+  g.userData.vegKind = kind;
   return g;
 }

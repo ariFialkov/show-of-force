@@ -6,10 +6,13 @@ globalThis.document = { createElementNS: fakeEl, createElement: fakeEl };
 import fs from 'node:fs';
 const THREE = await import('three');
 const { FBXLoader } = await import('three/examples/jsm/loaders/FBXLoader.js');
+const { OBJLoader } = await import('three/examples/jsm/loaders/OBJLoader.js');
 
 for (const f of process.argv.slice(2)) {
   const buf = fs.readFileSync(f);
-  const obj = new FBXLoader().parse(buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength), '');
+  const obj = f.endsWith('.obj')
+    ? new OBJLoader().parse(buf.toString('utf8'))
+    : new FBXLoader().parse(buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength), '');
   obj.updateMatrixWorld(true);
   console.log('\n=== ' + f);
   console.log('top-level children:', obj.children.map(c => `${c.name}(${c.type})`).join(', ').slice(0, 400));
