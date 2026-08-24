@@ -456,6 +456,109 @@ const variantsByKind = {};
   variantsByKind.fountain = [v];
 }
 
+// Spin a baked variant about Y so its longest horizontal axis runs along Z.
+// The source vehicles sit at arbitrary yaws in their showcase layout, so an
+// axis-aligned test isn't enough: the dominant direction comes from the
+// horizontal covariance's principal axis. Vehicles then all share a
+// "forward" and a caller's rotation.y aligns them with a corridor.
+function canonicalizeVehicle(v) {
+  let sxx = 0, szz = 0, sxz = 0;
+  const n = v.positions.length / 3;
+  for (let i = 0; i < v.positions.length; i += 3) {
+    const x = v.positions[i], z = v.positions[i + 2];
+    sxx += x * x; szz += z * z; sxz += x * z;
+  }
+  sxx /= n; szz /= n; sxz /= n;
+  const theta = 0.5 * Math.atan2(2 * sxz, sxx - szz); // major-axis angle from +X
+  const phi = Math.PI / 2 - theta;                    // bring it onto +Z
+  const c = Math.cos(phi), s = Math.sin(phi);
+  const spin = (arr, i) => {
+    const x = arr[i], z = arr[i + 2];
+    arr[i] = x * c - z * s;
+    arr[i + 2] = x * s + z * c;
+  };
+  for (let i = 0; i < v.positions.length; i += 3) {
+    spin(v.positions, i);
+    spin(v.normals, i);
+  }
+  // re-centre the footprint and re-anchor to the ground after the spin
+  let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity, minZ = Infinity, maxZ = -Infinity;
+  for (let i = 0; i < v.positions.length; i += 3) {
+    minX = Math.min(minX, v.positions[i]); maxX = Math.max(maxX, v.positions[i]);
+    minY = Math.min(minY, v.positions[i + 1]); maxY = Math.max(maxY, v.positions[i + 1]);
+    minZ = Math.min(minZ, v.positions[i + 2]); maxZ = Math.max(maxZ, v.positions[i + 2]);
+  }
+  const cx = (minX + maxX) / 2, cz = (minZ + maxZ) / 2;
+  for (let i = 0; i < v.positions.length; i += 3) {
+    v.positions[i] -= cx;
+    v.positions[i + 1] -= minY;
+    v.positions[i + 2] -= cz;
+  }
+  v.height = maxY - minY;
+  v.radius = Math.max(maxX - minX, maxZ - minZ) / 2;
+  return { width: maxX - minX, length: maxZ - minZ, height: v.height };
+}
+
+// ------------------------------------------------------------------- cars
+{
+  console.log('cars:');
+  const obj = loadFbx('assets-src/props/cars.fbx');
+  const meshes = meshesOf(obj);
+  const bodies = meshes.filter((m) => /body/i.test(m.name));
+  const wheels = meshes.filter((m) => !/body/i.test(m.name));
+  // one plausible paint colour per variant (vertex-baked, so the runtime
+  // burnt material just multiplies them all down to charred tones)
+  const PAINT = [
+    0xb9b5ae, 0x6e2f2a, 0x2d4256, 0x3f4a3a, 0x8b7f6a,
+    0x2b2e32, 0x96571f, 0x4a5058, 0x78797c, 0x5b3f52
+  ];
+  const carColor = (paint) => (mesh, mi) => {
+    const mats = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
+    const n = (mats[mi]?.name ?? '').toLowerCase();
+    if (n.startsWith('whee')) return tint(0x1b1c1e, mesh.name + mi, 0.03); // Wheel / Wheek
+    if (n === 'glass') return tint(0x222c34, mesh.name + mi, 0.02);
+    if (n === 'optics') return tint(0xe6e2d0, mesh.name + mi, 0.02);
+    if (n === 'body') return tint(paint, mesh.name, 0.03);
+    return tint(0x3a3d40, mesh.name + mi, 0.03);
+  };
+  const out = [];
+  bodies.forEach((b, i) => {
+    // wheels belong to the body whose footprint they sit under — nearest-N
+    // mis-assigns the pairs of cars that share a wheel-set position
+    const bb = bboxOf(b);
+    const mine = wheels.filter((w) => {
+      const c = bboxOf(w).getCenter(new THREE.Vector3());
+      return c.x > bb.min.x && c.x < bb.max.x && c.z > bb.min.z && c.z < bb.max.z;
+    });
+    const label = b.name.replace(/_?body/i, '').toLowerCase() || `car${i}`;
+    const v = bakeVariant(`car:${label}`, [b, ...mine], carColor(PAINT[i % PAINT.length]), 2600, 0.08, true, 0.1);
+    const dim = canonicalizeVehicle(v);
+    scaleVariant(v, 440 / dim.length); // ~4.4m nose to tail
+    console.log(`    ^ ${mine.length} wheels, ${(dim.width * 4.4 / dim.length).toFixed(2)}m wide`);
+    out.push(v);
+  });
+  variantsByKind.car = out;
+}
+
+// --------------------------------------------------------------- computer
+{
+  console.log('computer:');
+  const obj = loadFbx('assets-src/props/computer.obj');
+  // the OBJ ships unnamed lambert slots, so parts are tinted from a
+  // desktop-hardware palette keyed by material name
+  const PC = [0xc9c3b2, 0x272a2e, 0x8d8879, 0x191b1e, 0xb0aa9b, 0x44474b];
+  const colorFor = (mesh, mi) => {
+    const mats = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
+    const n = mats[mi]?.name ?? mesh.name;
+    let h = 0;
+    for (const ch of n) h = (h * 31 + ch.charCodeAt(0)) >>> 0;
+    return tint(PC[h % PC.length], n, 0.04);
+  };
+  const v = bakeVariant('computer0', meshesOf(obj), colorFor, 1800, 0.08, true, 3.2);
+  scaleVariant(v, 62 / v.height);
+  variantsByKind.computer = [v];
+}
+
 // ------------------------------------------- objective set-pieces
 {
   console.log('objectives:');

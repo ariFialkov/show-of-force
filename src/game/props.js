@@ -5,8 +5,9 @@
 
 import * as THREE from 'three';
 
-let kinds = null;      // { kind: [ { geo, height, radius } ] }
-let material = null;   // shared vertex-coloured lambert
+let kinds = null;        // { kind: [ { geo, height, radius } ] }
+let material = null;     // shared vertex-coloured lambert
+let burntMaterial = null; // same geometry, charred: vertex colours scaled way down
 
 export function propsReady() {
   return kinds !== null;
@@ -36,6 +37,11 @@ export async function initProps(url) {
     // foliage is single-sided card soup — double-side it or crowns look
     // hollow/grey from half the angles
     material = new THREE.MeshLambertMaterial({ vertexColors: true, side: THREE.DoubleSide });
+    // material colour multiplies the baked vertex colours, so one dark warm
+    // grey turns any paint job into scorched metal
+    burntMaterial = new THREE.MeshLambertMaterial({
+      vertexColors: true, side: THREE.DoubleSide, color: 0x2b2622
+    });
     kinds = out;
   } catch (e) {
     console.warn('props.bin unavailable, using procedural fallbacks', e);
@@ -45,11 +51,11 @@ export async function initProps(url) {
 // A vegetation instance: random variant + a little scale variance. The
 // caller owns position/rotation. Returns null when the bin isn't loaded
 // (world.js falls back to its procedural builders).
-export function makeVegetation(kind, rng, { scale = 1, vary = true } = {}) {
+export function makeVegetation(kind, rng, { scale = 1, vary = true, burnt = false } = {}) {
   const list = kinds?.[kind];
   if (!list || list.length === 0) return null;
   const v = rng ? rng.pick(list) : list[Math.floor(Math.random() * list.length)];
-  const mesh = new THREE.Mesh(v.geo, material);
+  const mesh = new THREE.Mesh(v.geo, burnt ? burntMaterial : material);
   const s = (rng && vary ? rng.range(0.85, 1.15) : 1) * scale;
   mesh.scale.setScalar(s);
   const g = new THREE.Group();
@@ -57,4 +63,14 @@ export function makeVegetation(kind, rng, { scale = 1, vary = true } = {}) {
   g.userData.vegHeight = v.height * s;
   g.userData.vegKind = kind;
   return g;
+}
+
+// Char an already-placed baked prop — used when a vehicle cooks off.
+export function scorch(group) {
+  if (!burntMaterial) return false;
+  let hit = false;
+  group.traverse((o) => {
+    if (o.isMesh && o.material === material) { o.material = burntMaterial; hit = true; }
+  });
+  return hit;
 }

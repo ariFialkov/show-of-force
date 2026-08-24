@@ -3,7 +3,7 @@
 
 import * as THREE from 'three';
 import { riggedReady, makeRiggedSoldier, riggedWalk, riggedIdle, riggedDeath, riggedHit, riggedAim, riggedFire, riggedStun, riggedReload, riggedSit, makeWeaponMesh } from './rigged.js';
-import { makeVegetation } from './props.js';
+import { makeVegetation, scorch } from './props.js';
 
 const mat = (color, opts = {}) => new THREE.MeshLambertMaterial({ color, ...opts });
 
@@ -624,20 +624,64 @@ export function makeObjectiveProp(kind) {
       break;
     }
     case 'console': {
-      const desk = box(1.3, 0.75, 0.7, 0x3c4148);
-      desk.position.y = 0.38;
-      const screen = box(0.7, 0.45, 0.06, 0x14181d);
-      screen.position.set(0, 1.05, -0.2);
-      screen.rotation.x = -0.15;
-      const glow = new THREE.Mesh(
-        new THREE.PlaneGeometry(0.6, 0.35),
-        new THREE.MeshBasicMaterial({ color: 0x6fd6ff })
-      );
-      glow.position.set(0, 1.05, -0.165);
-      glow.rotation.x = -0.15;
+      const desk = box(1.25, 0.7, 0.66, 0x4d545c);
+      desk.position.y = 0.35;
+      const deskTop = box(1.34, 0.06, 0.74, 0x5b636c);
+      deskTop.position.y = 0.72;
+      g.add(desk, deskTop);
+      const pc = makeVegetation('computer', null, { vary: false });
+      if (pc) {
+        // baked terminal standing on the desk, screen toward the player. The
+        // lit-screen plane is derived from the model's own bounds so it lands
+        // flush on the front face rather than at a guessed offset.
+        const geo = pc.children[0].geometry;
+        geo.computeBoundingBox();
+        const bb = geo.boundingBox;
+        const s = pc.children[0].scale.x;
+        // isolate the monitor (everything in the model's top 40%) so the lit
+        // screen lands on the display, not on the whole desktop's centre
+        const p = geo.attributes.position;
+        const cut = bb.min.y + (bb.max.y - bb.min.y) * 0.6;
+        let sx = 0, n = 0, wMin = Infinity, wMax = -Infinity, frontZ = -Infinity;
+        for (let i = 0; i < p.count; i++) {
+          if (p.getY(i) < cut) continue;
+          const x = p.getX(i);
+          sx += x; n++;
+          wMin = Math.min(wMin, x);
+          wMax = Math.max(wMax, x);
+          frontZ = Math.max(frontZ, p.getZ(i));
+        }
+        const glow = new THREE.Mesh(
+          new THREE.PlaneGeometry(
+            Math.max(0.12, (wMax - wMin) * s * 0.74),
+            Math.max(0.1, (bb.max.y - cut) * s * 0.66)
+          ),
+          new THREE.MeshBasicMaterial({ color: 0x6fd6ff, transparent: true, opacity: 0.7 })
+        );
+        glow.position.set(
+          n > 0 ? (sx / n) * s : 0,
+          (cut + (bb.max.y - cut) * 0.55) * s,
+          frontZ * s + 0.012
+        );
+        pc.add(glow);
+        pc.scale.setScalar(1.25);
+        pc.position.set(0, 0.75, -0.04);
+        g.add(pc);
+      } else {
+        const screen = box(0.7, 0.45, 0.06, 0x14181d);
+        screen.position.set(0, 1.05, -0.2);
+        screen.rotation.x = -0.15;
+        const glow = new THREE.Mesh(
+          new THREE.PlaneGeometry(0.6, 0.35),
+          new THREE.MeshBasicMaterial({ color: 0x6fd6ff })
+        );
+        glow.position.set(0, 1.05, -0.165);
+        glow.rotation.x = -0.15;
+        g.add(screen, glow);
+      }
       const keyboard = box(0.5, 0.04, 0.25, 0x22262c);
-      keyboard.position.set(0, 0.78, 0.1);
-      g.add(desk, screen, glow, keyboard);
+      keyboard.position.set(0, 0.78, 0.24);
+      g.add(keyboard);
       break;
     }
     case 'charge': {
@@ -835,7 +879,17 @@ function makeHeli() {
 
 // Hostile technical / getaway car for the 'car' set-piece. Returns a group
 // with userData.wreck() that chars it into a burnt-out husk.
-export function makeCar(rng) {
+export function makeCar(rng, { burnt = false } = {}) {
+  // baked vehicle when props.bin is loaded; wreck() chars the paint in place
+  const baked = makeVegetation('car', rng, { vary: false, burnt });
+  if (baked) {
+    baked.add(makeBlobShadow(1.9));
+    baked.userData.wreck = () => {
+      scorch(baked);
+      baked.scale.y = 0.86; // settles on its suspension
+    };
+    return enableShadows(baked);
+  }
   const g = new THREE.Group();
   const paint = rng?.pick?.([0x7a2f28, 0x2f4a5c, 0x777d6a, 0x40403c]) ?? 0x7a2f28;
   const body = box(1.7, 0.55, 3.9, paint);

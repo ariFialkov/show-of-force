@@ -58,16 +58,32 @@ export async function initRigged(url) {
       clips[c.name] = new THREE.AnimationClip(c.name, c.duration, tracks);
     }
 
-    // upper-body-only reload: the source clip's legs are static, which looks
-    // wrong on a moving bot — a track-filtered variant drives only the torso
-    // and arms so it can layer OVER walk/run (legs keep their locomotion)
+    // Split masks so a reload can run on the upper body while the legs keep
+    // their locomotion. The source reload clip has static legs, which looks
+    // wrong on a moving bot. Two complementary variants are baked:
+    //   reload-upper   torso + arms + head only
+    //   <clip>-lower   hips + legs only, for every clip a reload can sit on
+    // Because the masks don't overlap, no bone is ever driven by two actions
+    // at once (which would blend them and dilute both).
+    const LOWER = [
+      'Hips', 'LeftUpLeg', 'LeftLeg', 'LeftFoot', 'LeftToeBase', 'LeftToe_End',
+      'RightUpLeg', 'RightLeg', 'RightFoot', 'RightToeBase', 'RightToe_End'
+    ];
+    const isLower = (trackName) => {
+      const node = trackName.split('.')[0];
+      return LOWER.some((b) => node.endsWith(b));
+    };
     if (clips.reload) {
-      const LOWER = ['Hips', 'LeftUpLeg', 'LeftLeg', 'LeftFoot', 'LeftToeBase', 'RightUpLeg', 'RightLeg', 'RightFoot', 'RightToeBase'];
-      const upperTracks = clips.reload.tracks.filter((t) => {
-        const node = t.name.split('.')[0];
-        return !LOWER.some((b) => node.endsWith(b));
-      });
-      clips['reload-upper'] = new THREE.AnimationClip('reload-upper', clips.reload.duration, upperTracks);
+      clips['reload-upper'] = new THREE.AnimationClip(
+        'reload-upper', clips.reload.duration, clips.reload.tracks.filter((t) => !isLower(t.name))
+      );
+      for (const base of ['idle', 'aim', 'fire', 'walk', 'run', 'crouch-idle', 'crouch-walk', 'unarmed-run']) {
+        const c = clips[base];
+        if (!c) continue;
+        clips[`${base}-lower`] = new THREE.AnimationClip(
+          `${base}-lower`, c.duration, c.tracks.filter((t) => isLower(t.name))
+        );
+      }
     }
 
     // bind pose is a T-pose, so derive height from the head bone, not the
@@ -411,6 +427,17 @@ export function makeRiggedSoldier(camo, { rifle = true, mask = true, civilian = 
   // the mixer 'finished' event lifts the gate and the next bot tick takes
   // back control.
   const play = (name, { fade = 0.18, once = false, timeScale = 1, force = false } = {}) => {
+    // a one-shot (death, hit reaction, full-body reload) takes the whole
+    // skeleton back — cancel any running partial-body overlay first
+    if (once && rigState.overlay) {
+      actions[rigState.overlay]?.stop();
+      rigState.overlay = null;
+    }
+    // while an upper-body overlay runs, the base clip drives ONLY the lower
+    // body, so the overlay owns the torso and arms outright. The bot logic
+    // keeps requesting 'walk'/'aim' as usual and gets remapped here, which
+    // means the base clip can still change freely mid-reload.
+    if (rigState.overlay && actions[`${name}-lower`]) name = `${name}-lower`;
     const next = actions[name];
     if (!next) return false;
     if (rigState.busy && !force) return false;
@@ -436,7 +463,11 @@ export function makeRiggedSoldier(camo, { rifle = true, mask = true, civilian = 
   // base keeps driving whatever bones the overlay doesn't touch.
   const playOverlay = (name, { fade = 0.12, timeScale = 1 } = {}) => {
     const a = actions[name];
-    if (!a || rigState.overlay) return 0;
+    if (!a || rigState.overlay || rigState.busy) return 0;
+    const base = rigState.current;
+    // the base must have a lower-body-only twin, otherwise both actions
+    // would fight over the torso
+    if (!base || !actions[`${base}-lower`]) return 0;
     a.reset();
     a.setLoop(THREE.LoopOnce, 1);
     a.clampWhenFinished = true;
@@ -445,12 +476,17 @@ export function makeRiggedSoldier(camo, { rifle = true, mask = true, civilian = 
     a.fadeIn(fade);
     a.play();
     rigState.overlay = name;
+    play(base, { fade: 0.1 }); // remaps to `${base}-lower` now the overlay is up
     return a.getClip().duration / timeScale;
   };
   mixer?.addEventListener('finished', (e) => {
     if (rigState.overlay && e.action === actions[rigState.overlay]) {
-      e.action.fadeOut(0.18);
+      e.action.fadeOut(0.2);
       rigState.overlay = null;
+      // hand the upper body back to the full-skeleton base clip
+      if (rigState.current?.endsWith('-lower')) {
+        play(rigState.current.slice(0, -'-lower'.length), { fade: 0.2 });
+      }
     } else {
       rigState.busy = false;
     }
@@ -657,14 +693,14 @@ export function riggedDeath(soldier, cause = 'gunfire') {
 }
 
 // One-shot magazine change: weapon lowered, bot can't fire until it ends.
-// While the bot is in a locomotion clip the reload runs as an upper-body
-// overlay so the legs keep walking/running underneath it.
+// Always attempted as an upper-body overlay so the legs keep doing whatever
+// they were doing — running, strafing or holding a stance — and can even
+// change mid-reload. Falls back to the full-body clip only when no
+// lower-body twin exists for the current stance.
 export function riggedReload(soldier) {
   const r = soldier.userData.rig;
   if (!r?.play || !template?.clips.reload) return 0;
-  const moving = r.state.current === 'walk' || r.state.current === 'run' ||
-    r.state.current === 'crouch-walk' || r.state.current === 'unarmed-run';
-  if (moving && r.playOverlay && r.actions['reload-upper']) {
+  if (r.playOverlay) {
     const d = r.playOverlay('reload-upper', { fade: 0.12 });
     if (d > 0) return d;
   }

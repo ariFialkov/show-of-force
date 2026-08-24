@@ -1586,6 +1586,12 @@ function makeMount(kind, K, env, rng, wallH) {
 // ---------------------------------------------- freestanding legacy props
 
 function makeProp(type, env, rng, K) {
+  // burnt-out vehicle left in the street: the baked car with charred paint
+  if (type === 'wreck') {
+    const w = makeVegetation('car', rng, { vary: false, burnt: true });
+    if (w) { w.scale.y *= 0.86; return w; }
+    return null;
+  }
   if (BAKED_KIND[type]) {
     const [kind, scale] = BAKED_KIND[type];
     // the fountain is a fixed-size centrepiece; everything else gets the
