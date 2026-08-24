@@ -14,7 +14,7 @@ import { RISK_FACTORS } from '../config.js';
 import { buildWorld } from './world.js';
 import { Effects, sound } from './effects.js';
 import { EnemyBot, Comrade } from './bots.js';
-import { makeVehicle, makeCar, makeCivilian, makeObjectiveProp, makeGate, makeBackupViewmodel, makeWeaponViewmodel, makeRiggedViewmodel, animateWalk, poseIdle, poseFire, poseSit, syncWeaponStance } from './models.js';
+import { makeVehicle, makeCar, makeCivilian, makeObjectiveProp, makeGate, makeBackupViewmodel, makeWeaponViewmodel, makeRiggedViewmodel, makeThrownWeapon, animateWalk, poseIdle, poseFire, poseSit, syncWeaponStance } from './models.js';
 
 // Squad backup weapons (hold FIRE on mobile / N on desktop to switch)
 const BACKUPS = {
@@ -1201,7 +1201,9 @@ export class Game {
       grav = 2.5;
       sound.burst({ dur: 0.1, freq: 900, gain: 0.25 });
     } else if (kind === 'knife') {
-      mesh = new THREE.Mesh(new THREE.BoxGeometry(0.04, 0.09, 0.68), new THREE.MeshLambertMaterial({ color: 0xaeb8be }));
+      // the round in flight IS the carried blade, at the same size
+      mesh = makeThrownWeapon('knife')
+        ?? new THREE.Mesh(new THREE.BoxGeometry(0.04, 0.09, 0.68), new THREE.MeshLambertMaterial({ color: 0xaeb8be }));
       vel = dir.clone().multiplyScalar(30);
       grav = 7;
       sound.tone({ dur: 0.08, from: 1200, to: 700, gain: 0.09 });

@@ -7,6 +7,8 @@ import { riggedReady, makeRiggedSoldier, riggedWalk, riggedIdle, riggedDeath, ri
 // carry-style sync (knife stance vs shouldered rifle) — used by the
 // first-person viewmodel driver in game.js; bots get it via the pose facades
 export { riggedStance as syncWeaponStance };
+// the thrown ballistic knife is the carried prefab itself, not a stand-in
+export { makeThrownWeapon } from './rigged.js';
 import { makeVegetation, scorch } from './props.js';
 
 const mat = (color, opts = {}) => new THREE.MeshLambertMaterial({ color, ...opts });

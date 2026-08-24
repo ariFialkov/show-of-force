@@ -21,6 +21,9 @@ const WEAPON_SCALE = 1.2; // held weapons read small against the bulky trooper
 // small hand-local correction in metres for the palm centre vs bone origin.
 const KNIFE_GRIP_FRAC = 0.18;
 const KNIFE_TWEAK = { x: 0, y: -0.02, z: 0.05 };
+// per-weapon carry scale: the knife reads toy-sized next to the long guns
+// at the shared fit scale, so it gets its own multiplier
+const weaponCarryScale = (n) => WEAPON_SCALE * (n === 'knife' ? 2 : 1);
 
 let template = null; // { position, normal, skinIndex, skinWeight, zones, index, boneDefs, boneInverses, clip, scale, minY, headY }
 const paletteGeomCache = new Map();
@@ -310,6 +313,16 @@ export function makeWeaponMesh(name, camo) {
   return mesh;
 }
 
+// A free-standing copy of a weapon at the size it is carried at, for
+// projectiles that ARE the weapon (the thrown ballistic knife) so the round
+// in flight matches the one in the hand. The baked geometry is centred on
+// its own origin, so callers can tumble it about any axis directly.
+export function makeThrownWeapon(name, camo = null) {
+  const mesh = makeWeaponMesh(name, camo);
+  if (mesh) mesh.scale.setScalar(weaponCarryScale(name));
+  return mesh;
+}
+
 // --------------------------------------------------------- instantiation
 
 function buildBones() {
@@ -565,9 +578,7 @@ export function makeRiggedSoldier(camo, { rifle = true, mask = true, civilian = 
     helper.updateMatrix();
     const local = helper.matrix.clone()
       .premultiply(new THREE.Matrix4().copy(handR.matrixWorld).invert());
-    // per-weapon carry scale: the knife reads toy-sized next to the long
-    // guns at the shared fit scale, so it gets its own multiplier
-    const scaleFor = (n) => WEAPON_SCALE * (n === 'knife' ? 2 : 1);
+    const scaleFor = weaponCarryScale;
     const r = makeWeaponMesh(weapon, camo) ?? makeRifle();
     local.decompose(r.position, r.quaternion, r.scale);
     r.scale.multiplyScalar(scaleFor(weapon));
