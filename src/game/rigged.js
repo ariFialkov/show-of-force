@@ -14,6 +14,13 @@ import { IS_TOUCH } from './controls.js';
 
 const TARGET_HEIGHT = 1.76;
 const WEAPON_SCALE = 1.2; // held weapons read small against the bulky trooper
+// A knife is held IN the fist, not carried out front like a long gun. The
+// seat is solved rather than nudged: the point this far along the knife's
+// own length (0 = butt, 1 = tip) is placed at the hand bone, so the handle
+// lands in the palm and the rest of the blade projects forward. TWEAK is a
+// small hand-local correction in metres for the palm centre vs bone origin.
+const KNIFE_GRIP_FRAC = 0.18;
+const KNIFE_TWEAK = { x: 0, y: -0.02, z: 0.05 };
 
 let template = null; // { position, normal, skinIndex, skinWeight, zones, index, boneDefs, boneInverses, clip, scale, minY, headY }
 const paletteGeomCache = new Map();
@@ -541,6 +548,7 @@ export function makeRiggedSoldier(camo, { rifle = true, mask = true, civilian = 
   let muzzle = new THREE.Object3D();
   let alignWeapon = null;
   let swapWeapon = null;
+  let heldWeapons = []; // exposed for grip tuning / inspection
   const handR = boneMap.get('mixamorigRightHand');
   const handL = boneMap.get('mixamorigLeftHand');
   if (rifle && handR && handL) {
@@ -579,6 +587,7 @@ export function makeRiggedSoldier(camo, { rifle = true, mask = true, civilian = 
       }
     }
     const held = rB ? [r, rB] : [r];
+    heldWeapons = held;
     // Minimal rotation that swings the barrel onto body-forward, applied in
     // hand-local space so the grip stays put. Re-runnable: the pose the
     // weapon was fitted in isn't the pose it is carried in, so the caller
@@ -602,10 +611,21 @@ export function makeRiggedSoldier(camo, { rifle = true, mask = true, civilian = 
     alignWeapon();
     for (const w of held) {
       if ((w === r ? weapon : backupWeapon) === 'knife') {
-        // the knife is gripped AT the fist — the long-gun forward carry
-        // offset left it hovering ahead of and above the hand
-        w.translateZ(-0.02 / template.scale);
-        w.translateY(-0.06 / template.scale);
+        // Solve the seat instead of offsetting the long-gun carry pose,
+        // which left the blade's axis floating ~15cm clear of the fist.
+        // Derived from the mesh's own bounds, so it stays correct whatever
+        // internal origin the bake produced.
+        w.geometry.computeBoundingBox();
+        const kb = w.geometry.boundingBox;
+        const gripLocal = new THREE.Vector3(
+          (kb.min.x + kb.max.x) / 2,
+          (kb.min.y + kb.max.y) / 2,
+          kb.min.z + (kb.max.z - kb.min.z) * KNIFE_GRIP_FRAC
+        ).multiply(w.scale).applyQuaternion(w.quaternion);
+        w.position.copy(gripLocal).negate();
+        w.position.x += KNIFE_TWEAK.x / template.scale;
+        w.position.y += KNIFE_TWEAK.y / template.scale;
+        w.position.z += KNIFE_TWEAK.z / template.scale;
         continue;
       }
       // carried well forward of the fists and riding above them; the
@@ -677,7 +697,7 @@ export function makeRiggedSoldier(camo, { rifle = true, mask = true, civilian = 
     if (b) rest[k] = { q: b.quaternion.clone(), p: b.position.clone() };
   }
 
-  outer.userData.rig = { ...rig, rest, mixer, actions, play, playOverlay, stopOverlay, state: rigState, alignWeapon, swapWeapon };
+  outer.userData.rig = { ...rig, rest, mixer, actions, play, playOverlay, stopOverlay, state: rigState, alignWeapon, swapWeapon, bodyScale: template.scale, held: heldWeapons };
   outer.userData.tick = (dt) => { mixer?.update(dt); };
   outer.userData.parts = {
     legL: rig.legL, legR: rig.legR, armL: rig.armL, armR: rig.armR,
