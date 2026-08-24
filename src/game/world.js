@@ -10,7 +10,8 @@ const lambert = (color, opts = {}) => new THREE.MeshLambertMaterial({ color, ...
 const BAKED_KIND = {
   palm: ['palm', 1], tree: ['leafy', 1], pine: ['fir', 1], fern: ['bush', 0.85],
   cactus: ['cactus', 1], rock: ['debris', 0.55], statue: ['statue', 1],
-  barrier: ['barrier', 1], debris: ['debris', 1], fountain: ['fountain', 2]
+  barrier: ['barrier', 1], debris: ['debris', 1], fountain: ['fountain', 2],
+  enemyjeep: ['enemy-jeep', 1], enemytank: ['enemy-tank', 1]
 };
 
 // --------------------------------------------------- procedural textures

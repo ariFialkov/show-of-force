@@ -9,7 +9,7 @@ export const TEAMS = {
     emblem: '⚔',
     domain: 'land',
     vehicle: 'humvee',
-    vehicleName: 'M1245 Assault Humvee',
+    vehicleName: 'M1 Spearhead MBT',
     backup: 'flashgl',
     gear: 'helmet-delta',
     camo: { cloth: 0x5b5843, vest: 0x3d3a2c, helmet: 0x4a4636, skin: 0xc9a06c }
@@ -61,7 +61,7 @@ export const TEAMS = {
     emblem: '⛨',
     domain: 'cartel',
     vehicle: 'apc',
-    vehicleName: 'BearCat G3 APC',
+    vehicleName: 'Blacked-Out Technical',
     backup: 'rpg',
     gear: 'helmet-balaclava',
     camo: { cloth: 0x23262b, vest: 0x15171b, helmet: 0x1d2025, skin: 0xb98d5e }
@@ -87,7 +87,7 @@ export const LOCATIONS = {
       sky: 0xe8c9a0, fog: 0xdcb98d, fogDensity: 0.02, ground: 0xd4b078,
       wall: 0xbb9257, wallAlt: 0xa07b48, building: 0xc09a60, sun: 0xfff0cc,
       sunIntensity: 1.35, hemi: 0xf2e2bb, hemiGround: 0x9c7c4e,
-      props: ['camp', 'defense', 'junk', 'power', 'rock', 'palm', 'dune', 'crate', 'barrier', 'wreck'],
+      props: ['camp', 'defense', 'junk', 'power', 'rock', 'palm', 'dune', 'crate', 'barrier', 'wreck', 'enemyjeep'],
       mounts: ['pipe', 'vent', 'ac'], night: false
     }
   },
@@ -131,7 +131,7 @@ export const LOCATIONS = {
       sky: 0x7d9070, fog: 0x6f855f, fogDensity: 0.03, ground: 0x45552e,
       wall: 0x55663a, wallAlt: 0x42522e, building: 0x64553c, sun: 0xf2ecc8,
       sunIntensity: 0.85, hemi: 0xa8bd90, hemiGround: 0x33421f,
-      props: ['defense', 'camp', 'camp', 'junk', 'tent', 'barrel', 'tree', 'fence', 'debris'],
+      props: ['defense', 'camp', 'camp', 'junk', 'tent', 'barrel', 'tree', 'fence', 'debris', 'enemyjeep'],
       mounts: ['vine', 'pipe', 'vent'], night: false
     }
   },
@@ -153,7 +153,7 @@ export const LOCATIONS = {
       sky: 0xc4b49a, fog: 0xb3a289, fogDensity: 0.02, ground: 0x99805c,
       wall: 0x86704c, wallAlt: 0x715d3e, building: 0x8d7752, sun: 0xffeecb,
       sunIntensity: 1.1, hemi: 0xd9c9a8, hemiGround: 0x6e5b3e,
-      props: ['defense', 'camp', 'junk', 'rock', 'tent', 'antenna', 'crate', 'dune', 'debris', 'debris', 'wreck'],
+      props: ['defense', 'camp', 'junk', 'rock', 'tent', 'antenna', 'crate', 'dune', 'debris', 'debris', 'wreck', 'enemyjeep', 'enemytank'],
       mounts: ['pipe', 'vent'], night: false
     }
   },

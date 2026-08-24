@@ -794,13 +794,37 @@ export function poseIdle(soldier, t = 0) {
 
 // ---------------------------------------------------------------- vehicles
 
+// Squad seating for the baked insertion vehicles, in vehicle-local metres
+// (+Z = nose). Three comrades ride visibly; the player is the camera.
+const VEHICLE_SEATS = {
+  humvee: [[-1.05, 2.1, -0.9], [1.05, 2.1, -0.9], [0, 2.1, -2.1]],  // tank rear deck
+  boat: [[-0.72, 0.55, 0.55], [0.72, 0.55, 0.55], [-0.72, 0.55, -0.95]],
+  truck: [[-0.55, 1.0, -0.85], [0.55, 1.0, -0.85], [-0.55, 1.0, 0.05]],
+  apc: [[-0.6, 1.1, -1.25], [0.6, 1.1, -1.25], [0, 1.1, -2.0]]      // pickup bed
+};
+
 export function makeVehicle(type) {
+  // baked insertion vehicles (tank, dinghy, jeep, blacked-out pickup,
+  // jump plane); the primitive builders below stay as fallbacks
+  const bakedKind = {
+    humvee: 'veh-tank', boat: 'veh-boat', truck: 'veh-jeep',
+    apc: 'veh-pickup', plane: 'veh-plane'
+  }[type];
+  if (bakedKind) {
+    const v = makeVegetation(bakedKind, null, { vary: false });
+    if (v) {
+      const seats = VEHICLE_SEATS[type];
+      if (seats) v.userData.seats = seats.map((s) => new THREE.Vector3(...s));
+      return enableShadows(v);
+    }
+  }
   switch (type) {
     case 'boat': return enableShadows(makeBoat());
     case 'heli': return enableShadows(makeHeli());
     case 'parachute': return enableShadows(makeParachute());
     case 'apc': return enableShadows(makeApc());
     case 'truck': return enableShadows(makeTruck());
+    case 'plane': return null; // no procedural stand-in for the jump plane
     case 'humvee':
     default: return enableShadows(makeHumvee());
   }

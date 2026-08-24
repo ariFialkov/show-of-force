@@ -177,6 +177,10 @@ export class Game {
       for (const c of this.preludeChutes) this.scene.remove(c);
       this.preludeChutes = null;
     }
+    if (this.preludePlane) {
+      this.scene.remove(this.preludePlane);
+      this.preludePlane = null;
+    }
     this.prelude = null;
     if (this.viewmodel) { this.camera.remove(this.viewmodel); }
     this.effects.clear();
@@ -423,6 +427,9 @@ export class Game {
         this.scene.add(c);
         return c;
       });
+      // the jump plane thunders over the DZ while the sticks are in the air
+      this.preludePlane = makeVehicle('plane');
+      if (this.preludePlane) this.scene.add(this.preludePlane);
       this.prelude = { kind: 'drop', t: 0, dur: 6.2, start, yaw };
     } else {
       this.vehicle = makeVehicle(type);
@@ -434,11 +441,13 @@ export class Game {
         p1: stopPos.clone().addScaledVector(fwd, -20).addScaledVector(lat, 6),
         p2: stopPos, gatePos, start, fwd, lat, yaw,
         breachFired: false, fadeStarted: false,
-        seats: [
+        // baked vehicles carry their own seat layout; the fallback fits the
+        // procedural humvee-scale hulls
+        seats: (this.vehicle.userData.seats ?? [
           new THREE.Vector3(-0.45, 1.02, 0.55),
           new THREE.Vector3(0.5, 1.02, -0.6),
           new THREE.Vector3(-0.5, 1.02, -0.6)
-        ],
+        ]).map((s) => s.clone()),
         // crane shot: high 3/4 dolly, outside the walls
         craneFrom: stopPos.clone().addScaledVector(fwd, -32).addScaledVector(lat, 27).setY(16),
         craneTo: stopPos.clone().addScaledVector(fwd, -11).addScaledVector(lat, 15).setY(8.5),
@@ -476,6 +485,10 @@ export class Game {
       for (const c of this.preludeChutes) this.scene.remove(c);
       this.preludeChutes = null;
     }
+    if (this.preludePlane) {
+      this.scene.remove(this.preludePlane);
+      this.preludePlane = null;
+    }
     if (pr.kind === 'drop' && this.vehicle) this.vehicle.visible = false;
     this.prelude = null;
     this.mode = 'play';
@@ -498,6 +511,18 @@ export class Game {
       const e = ease(t / pr.dur);
       const alt = (1 - e) * 55;
       const sway = 1 - e;
+      // the jump plane you just left, droning away ahead of the stick — it
+      // sits below the falling camera's downward sightline so it actually
+      // crosses the frame instead of passing unseen overhead
+      if (this.preludePlane) {
+        const fx = -Math.sin(pr.yaw), fz = -Math.cos(pr.yaw);
+        const along = 6 + t * 42;
+        this.preludePlane.position.set(
+          pr.start.x + fx * along, 52, pr.start.z + fz * along
+        );
+        this.preludePlane.rotation.y = Math.atan2(fx, fz);
+        this.preludePlane.visible = t < pr.dur * 0.75;
+      }
       this.camera.position.set(
         pr.start.x + Math.sin(t * 1.3) * sway * 2.2,
         EYE + alt,

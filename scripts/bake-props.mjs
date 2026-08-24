@@ -559,6 +559,121 @@ function canonicalizeVehicle(v) {
   variantsByKind.computer = [v];
 }
 
+// ------------------------------------------------- insertion vehicles
+//
+// Pregame cinematic rides, one per team, plus enemy-schemed twins usable
+// as props. All are canonicalized nose-along-Z and metre-scaled.
+{
+  console.log('vehicles:');
+  const bakeVehicle = (name, meshes, colorFor, targetTris, lengthCm, unit = 1, flipZ = false) => {
+    const v = bakeVariant(name, meshes, colorFor, targetTris, 0.08, true, unit);
+    const dim = canonicalizeVehicle(v);
+    scaleVariant(v, lengthCm / dim.length);
+    if (flipZ) {
+      for (let i = 0; i < v.positions.length; i += 3) {
+        v.positions[i] = -v.positions[i];
+        v.positions[i + 2] = -v.positions[i + 2];
+        v.normals[i] = -v.normals[i];
+        v.normals[i + 2] = -v.normals[i + 2];
+      }
+      // mirror-free 180° yaw: also flip triangle winding? A pure Y-rotation
+      // keeps winding — (x,z)->(-x,-z) IS a 180° rotation, so nothing else
+      // to do.
+    }
+    return v;
+  };
+
+  // SEAL dinghy — one material; rubber-black hull with tonal panels.
+  // flipZ: the outboard-motor end canonicalized as the nose.
+  {
+    const obj = loadFbx('assets-src/props/dinghy.fbx');
+    const v = bakeVehicle('dinghy0', meshesOf(obj),
+      (m, mi) => tint(0x23272c, m.name + mi, 0.05), 3800, 480, 1, true);
+    variantsByKind['veh-boat'] = [v];
+  }
+
+  // Green Beret jeep — olive drab, glass dark; enemy twin in rust-maroon
+  {
+    const obj = loadFbx('assets-src/props/jeep.fbx');
+    const meshes = meshesOf(obj);
+    const jeepColor = (body) => (m, mi) => {
+      const mats = Array.isArray(m.material) ? m.material : [m.material];
+      const n = (mats[mi]?.name ?? '').toLowerCase();
+      if (n.includes('glass')) return tint(0x27313a, m.name, 0.02);
+      // cylinders skew dark (wheels, lights, exhaust, mounts)
+      const base = m.name.startsWith('pCylinder') ? 0x30342c : body;
+      return tint(base, m.name + mi, 0.05);
+    };
+    variantsByKind['veh-jeep'] = [bakeVehicle('jeep0', meshes, jeepColor(0x49523a), 4500, 420)];
+    variantsByKind['enemy-jeep'] = [bakeVehicle('enemy-jeep0', meshes, jeepColor(0x4e3832), 3800, 420)];
+  }
+
+  // Delta tank — desert tan hull/turret, near-black tracks; enemy twin dark
+  {
+    const obj = loadFbx('assets-src/props/tank.fbx');
+    const meshes = meshesOf(obj);
+    const tankColor = (hull, kit) => (m, mi) => {
+      if (m.name.startsWith('Wheel')) return tint(0x262824, m.name, 0.03);
+      const mats = Array.isArray(m.material) ? m.material : [m.material];
+      const n = (mats[mi]?.name ?? '').toLowerCase();
+      if (n.includes('glass') || n.includes('mirror')) return tint(0x2a3138, m.name, 0.02);
+      if (n.includes('assets')) return tint(kit, m.name + mi, 0.04);
+      return tint(hull, m.name + mi, 0.04);
+    };
+    variantsByKind['veh-tank'] = [bakeVehicle('tank0', meshes, tankColor(0x66604a, 0x4f4a38), 6000, 680)];
+    variantsByKind['enemy-tank'] = [bakeVehicle('enemy-tank0', meshes, tankColor(0x4a3a34, 0x38302c), 5200, 680)];
+  }
+
+  // Sicarios pickup — the cars-pack pickup with the paint murdered out
+  {
+    const obj = loadFbx('assets-src/props/cars.fbx');
+    const meshes = meshesOf(obj);
+    const body = meshes.find((m) => m.name === 'Pickup_Body');
+    if (body) {
+      const bb = bboxOf(body);
+      const mine = meshes.filter((m) => {
+        if (/body/i.test(m.name)) return false;
+        const c = bboxOf(m).getCenter(new THREE.Vector3());
+        return c.x > bb.min.x && c.x < bb.max.x && c.z > bb.min.z && c.z < bb.max.z;
+      });
+      const colorFor = (mesh, mi) => {
+        const mats = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
+        const n = (mats[mi]?.name ?? '').toLowerCase();
+        if (n.startsWith('whee')) return tint(0x1b1c1e, mesh.name + mi, 0.03);
+        if (n === 'glass') return tint(0x1c242b, mesh.name + mi, 0.02);
+        if (n === 'optics') return tint(0xd8d4c4, mesh.name + mi, 0.02);
+        return tint(0x1d2024, mesh.name, 0.03); // blacked-out body
+      };
+      // flipZ: canonicalization left this model tailgate-first
+      variantsByKind['veh-pickup'] = [
+        bakeVehicle('pickup-blk0', [body, ...mine], colorFor, 2800, 520, 0.1, true)
+      ];
+    }
+  }
+
+  // Ranger jump plane — exterior bake for the flyover (the interior
+  // materials are excluded here; a cabin-detail bake can come later for
+  // the jump-door cinematic, the source keeps everything)
+  {
+    const obj = loadFbx('assets-src/props/plane.obj');
+    const INTERIOR = /wire|deviceroom|screen|floorandwinbox|decoration|wall|light/;
+    const meshes = meshesOf(obj).filter((m) => {
+      const mats = Array.isArray(m.material) ? m.material : [m.material];
+      return !mats.some((mm) => INTERIOR.test((mm?.name ?? '').toLowerCase()));
+    });
+    const colorFor = (m, mi) => {
+      const mats = Array.isArray(m.material) ? m.material : [m.material];
+      const n = (mats[mi]?.name ?? '').toLowerCase();
+      if (n.includes('glass')) return tint(0x2b3540, m.name, 0.02);
+      if (n.includes('engine')) return tint(0x33373b, m.name + mi, 0.03);
+      if (n.includes('landgear')) return tint(0x24262a, m.name, 0.03);
+      return tint(0x59605a, m.name + mi, 0.035);
+    };
+    const v = bakeVehicle('plane0', meshes, colorFor, 7000, 2400, 100);
+    variantsByKind['veh-plane'] = [v];
+  }
+}
+
 // ------------------------------------------- objective set-pieces
 {
   console.log('objectives:');
