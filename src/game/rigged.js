@@ -557,9 +557,12 @@ export function makeRiggedSoldier(camo, { rifle = true, mask = true, civilian = 
     helper.updateMatrix();
     const local = helper.matrix.clone()
       .premultiply(new THREE.Matrix4().copy(handR.matrixWorld).invert());
+    // per-weapon carry scale: the knife reads toy-sized next to the long
+    // guns at the shared fit scale, so it gets its own multiplier
+    const scaleFor = (n) => WEAPON_SCALE * (n === 'knife' ? 2 : 1);
     const r = makeWeaponMesh(weapon, camo) ?? makeRifle();
     local.decompose(r.position, r.quaternion, r.scale);
-    r.scale.multiplyScalar(WEAPON_SCALE);
+    r.scale.multiplyScalar(scaleFor(weapon));
     handR.add(r);
     // Optional second weapon in the same grip: every baked prefab shares the
     // canonical frame (barrel +Z, origin at the grip), so it inherits the
@@ -570,7 +573,7 @@ export function makeRiggedSoldier(camo, { rifle = true, mask = true, civilian = 
       if (rB) {
         rB.position.copy(r.position);
         rB.quaternion.copy(r.quaternion);
-        rB.scale.copy(r.scale);
+        rB.scale.copy(r.scale).multiplyScalar(scaleFor(backupWeapon) / scaleFor(weapon));
         rB.visible = false;
         handR.add(rB);
       }
@@ -598,6 +601,13 @@ export function makeRiggedSoldier(camo, { rifle = true, mask = true, civilian = 
     };
     alignWeapon();
     for (const w of held) {
+      if ((w === r ? weapon : backupWeapon) === 'knife') {
+        // the knife is gripped AT the fist — the long-gun forward carry
+        // offset left it hovering ahead of and above the hand
+        w.translateZ(-0.02 / template.scale);
+        w.translateY(-0.06 / template.scale);
+        continue;
+      }
       // carried well forward of the fists and riding above them; the
       // first-person viewmodel pushes further out and up so the barrel
       // clears the support hand on camera

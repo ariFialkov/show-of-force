@@ -1143,6 +1143,9 @@ export class Game {
     ).clone();
     this.shake = Math.min(this.shake + (kind === 'rpg' ? 0.35 : 0.18), 0.7);
     if (this.viewmodel) this.viewmodel.position.z = kind === 'rpg' ? -0.3 : -0.38;
+    // drive the firing pose on the rigged arms (the knife's throw gesture
+    // hangs off this too — without it the viewmodel never animated a shot)
+    this.vmFireT = 0.22;
     this.effects.muzzleFlash(muzzle, dir);
 
     if (kind === 'shotgun') {
@@ -1198,7 +1201,7 @@ export class Game {
       grav = 2.5;
       sound.burst({ dur: 0.1, freq: 900, gain: 0.25 });
     } else if (kind === 'knife') {
-      mesh = new THREE.Mesh(new THREE.BoxGeometry(0.02, 0.05, 0.34), new THREE.MeshLambertMaterial({ color: 0xaeb8be }));
+      mesh = new THREE.Mesh(new THREE.BoxGeometry(0.04, 0.09, 0.68), new THREE.MeshLambertMaterial({ color: 0xaeb8be }));
       vel = dir.clone().multiplyScalar(30);
       grav = 7;
       sound.tone({ dur: 0.08, from: 1200, to: 700, gain: 0.09 });
