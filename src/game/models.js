@@ -795,12 +795,25 @@ export function poseIdle(soldier, t = 0) {
 // ---------------------------------------------------------------- vehicles
 
 // Squad seating for the baked insertion vehicles, in vehicle-local metres
-// (+Z = nose). Three comrades ride visibly; the player is the camera.
+// (+Z = nose). Three comrades ride visibly; `player` is where the camera
+// sits (eye offset applied by the cinematic).
 const VEHICLE_SEATS = {
-  humvee: [[-1.05, 2.1, -0.9], [1.05, 2.1, -0.9], [0, 2.1, -2.1]],  // tank rear deck
-  boat: [[-0.72, 0.55, 0.55], [0.72, 0.55, 0.55], [-0.72, 0.55, -0.95]],
-  truck: [[-0.55, 1.0, -0.85], [0.55, 1.0, -0.85], [-0.55, 1.0, 0.05]],
-  apc: [[-0.6, 1.1, -1.25], [0.6, 1.1, -1.25], [0, 1.1, -2.0]]      // pickup bed
+  humvee: {
+    seats: [[-0.85, 2.3, -0.75], [0.85, 2.3, -0.75], [0.85, 2.3, -2.0]],  // tank rear deck
+    player: [-0.85, 2.35, -2.0]
+  },
+  boat: {
+    seats: [[-0.72, 0.55, 0.55], [-0.72, 0.55, -0.95], [0.72, 0.55, -0.95]],
+    player: [0.72, 0.55, 0.4]
+  },
+  truck: {
+    seats: [[-0.55, 1.0, -0.85], [0.55, 1.0, -0.85], [-0.55, 1.0, 0.05]],
+    player: [0.55, 1.0, 0.05]
+  },
+  apc: {
+    seats: [[-0.6, 1.1, -1.25], [0.6, 1.1, -1.25], [-0.6, 1.1, -2.0]], // pickup bed
+    player: [0.6, 1.1, -0.5]
+  }
 };
 
 export function makeVehicle(type) {
@@ -813,8 +826,11 @@ export function makeVehicle(type) {
   if (bakedKind) {
     const v = makeVegetation(bakedKind, null, { vary: false });
     if (v) {
-      const seats = VEHICLE_SEATS[type];
-      if (seats) v.userData.seats = seats.map((s) => new THREE.Vector3(...s));
+      const layout = VEHICLE_SEATS[type];
+      if (layout) {
+        v.userData.seats = layout.seats.map((s) => new THREE.Vector3(...s));
+        v.userData.playerSeat = new THREE.Vector3(...layout.player);
+      }
       return enableShadows(v);
     }
   }
@@ -828,6 +844,81 @@ export function makeVehicle(type) {
     case 'humvee':
     default: return enableShadows(makeHumvee());
   }
+}
+
+// The Ranger jump plane assembled for the ride-inside cinematic: exterior
+// shell + cabin interior (both baked from the same source with an identical
+// transform, so they overlay), a hinged tail door that opens onto the
+// model's own down-ramp, a jump light, and dim warm cargo lighting. Cabin
+// constants come from raycast-probing the 34m bake: cargo floor y≈1.02
+// spanning z∈[-1,+12] (nose = +Z), ceiling ≈4.15, interior half-width
+// ≈1.8, and the model's own baked ramp slopes from the floor's aft edge
+// (z=-1) down to y≈0.2 at z≈-6.8 under the upswept tail. The hinged plate
+// seals that aperture when raised (tip meets the tail underside at
+// ~y2.83/z-6.3) and lies flush on the baked ramp when lowered.
+export const PLANE_CABIN = {
+  floor: 1.02,
+  seatL: [-1.35, 1.04, 2.4],
+  seatL2: [-1.35, 1.04, 0.6],
+  seatR2: [1.35, 1.04, 0.6],
+  player: [1.35, 1.04, 2.4],
+  rampHinge: [0, 1.02, -1.0],
+  rampLip: [0, 0.3, -6.4], // step-off point at the ramp's end
+  doorClosed: 0.35, doorOpen: -0.115
+};
+
+export function makeJumpPlane() {
+  const ext = makeVegetation('veh-plane', null, { vary: false });
+  if (!ext) return null;
+  const g = new THREE.Group();
+  g.add(ext);
+  const cab = makeVegetation('veh-plane-cabin', null, { vary: false });
+  if (cab) g.add(cab);
+  // hinged tail door: starts sealing the aperture, swings down to lie
+  // along the model's baked ramp
+  const hinge = new THREE.Group();
+  hinge.position.set(...PLANE_CABIN.rampHinge);
+  const plate = box(4.4, 0.14, 6.2, 0x40463f);
+  plate.position.set(0, 0, -3.1);
+  hinge.add(plate);
+  hinge.rotation.x = PLANE_CABIN.doorClosed;
+  g.add(hinge);
+  // fixed upper-door panel: slopes from the cabin ceiling's aft edge down
+  // to the aperture top, occluding the hull's unlit tail-liner void the
+  // way a raised C-130 upper door would
+  const header = box(3.9, 0.12, 5.9, 0x4d5348);
+  header.position.set(0, 3.42, -3.8);
+  header.rotation.x = -0.236;
+  g.add(header);
+  // and a flat tail-liner continuing aft along the tail underside, so no
+  // sightline over the lowered ramp reaches unlit hull
+  const liner = box(2.6, 0.1, 6.6, 0x4d5348);
+  liner.position.set(0, 2.72, -9.3);
+  g.add(liner);
+  // jump light on the right wall beside the aperture
+  const light = new THREE.Mesh(
+    new THREE.SphereGeometry(0.1, 8, 6),
+    new THREE.MeshBasicMaterial({ color: 0xc03028 })
+  );
+  light.position.set(1.55, 2.5, -0.9);
+  g.add(light);
+  // dim warm cargo lighting so the cabin isn't a black tube. Lambert
+  // shading is per-vertex and the hull liner has huge triangles, so
+  // physical decay leaves them black — decay 1 with generous range keeps
+  // every vertex inside the falloff.
+  const addLight = (x, y, z, intensity, range) => {
+    const pl = new THREE.PointLight(0xffd9ab, intensity, range, 1);
+    pl.position.set(x, y, z);
+    g.add(pl);
+  };
+  addLight(0, PLANE_CABIN.floor + 2.4, 0.0, 3, 16);
+  addLight(0, PLANE_CABIN.floor + 2.4, 6.0, 3, 16);
+  addLight(0, 1.9, -4.2, 3.5, 15); // over the ramp
+  // under the tail liner, so the aperture ceiling reads warm not void
+  addLight(0, 2.2, -8.0, 5, 20);
+  g.userData.ramp = hinge;
+  g.userData.jumpLight = light;
+  return g;
 }
 
 function wheels(g, positions, r = 0.32) {

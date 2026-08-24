@@ -496,7 +496,27 @@ function canonicalizeVehicle(v) {
   }
   v.height = maxY - minY;
   v.radius = Math.max(maxX - minX, maxZ - minZ) / 2;
-  return { width: maxX - minX, length: maxZ - minZ, height: v.height };
+  // phi/cx/cz/minY let a second variant (a vehicle's interior) receive the
+  // IDENTICAL transform so it overlays the first exactly
+  return { width: maxX - minX, length: maxZ - minZ, height: v.height, phi, cx, cz, minY };
+}
+
+// Apply the exact transform another variant's canonicalization produced —
+// same yaw spin, same recentring, then the same uniform scale.
+function applyVehicleTransformLike(v, params, scale) {
+  const c = Math.cos(params.phi), s = Math.sin(params.phi);
+  for (let i = 0; i < v.positions.length; i += 3) {
+    let x = v.positions[i], z = v.positions[i + 2];
+    v.positions[i] = x * c - z * s;
+    v.positions[i + 2] = x * s + z * c;
+    x = v.normals[i]; z = v.normals[i + 2];
+    v.normals[i] = x * c - z * s;
+    v.normals[i + 2] = x * s + z * c;
+    v.positions[i] -= params.cx;
+    v.positions[i + 1] -= params.minY;
+    v.positions[i + 2] -= params.cz;
+  }
+  scaleVariant(v, scale);
 }
 
 // ------------------------------------------------------------------- cars
@@ -651,17 +671,18 @@ function canonicalizeVehicle(v) {
     }
   }
 
-  // Ranger jump plane — exterior bake for the flyover (the interior
-  // materials are excluded here; a cabin-detail bake can come later for
-  // the jump-door cinematic, the source keeps everything)
+  // Ranger jump plane — exterior for the flyover, plus a cabin bake (the
+  // interior materials) receiving the IDENTICAL transform so the two
+  // overlay exactly for the ride-inside cinematic phase.
   {
     const obj = loadFbx('assets-src/props/plane.obj');
     const INTERIOR = /wire|deviceroom|screen|floorandwinbox|decoration|wall|light/;
-    const meshes = meshesOf(obj).filter((m) => {
+    const all = meshesOf(obj);
+    const isInterior = (m) => {
       const mats = Array.isArray(m.material) ? m.material : [m.material];
-      return !mats.some((mm) => INTERIOR.test((mm?.name ?? '').toLowerCase()));
-    });
-    const colorFor = (m, mi) => {
+      return mats.some((mm) => INTERIOR.test((mm?.name ?? '').toLowerCase()));
+    };
+    const extColor = (m, mi) => {
       const mats = Array.isArray(m.material) ? m.material : [m.material];
       const n = (mats[mi]?.name ?? '').toLowerCase();
       if (n.includes('glass')) return tint(0x2b3540, m.name, 0.02);
@@ -669,8 +690,25 @@ function canonicalizeVehicle(v) {
       if (n.includes('landgear')) return tint(0x24262a, m.name, 0.03);
       return tint(0x59605a, m.name + mi, 0.035);
     };
-    const v = bakeVehicle('plane0', meshes, colorFor, 7000, 2400, 100);
-    variantsByKind['veh-plane'] = [v];
+    const ext = bakeVariant('plane0', all.filter((m) => !isInterior(m)), extColor, 7000, 0.08, true, 100);
+    const dim = canonicalizeVehicle(ext);
+    const planeScale = 3400 / dim.length; // big enough that the cabin has headroom
+    scaleVariant(ext, planeScale);
+    variantsByKind['veh-plane'] = [ext];
+
+    const cabColor = (m, mi) => {
+      const mats = Array.isArray(m.material) ? m.material : [m.material];
+      const n = (mats[mi]?.name ?? '').toLowerCase();
+      if (n.includes('wire')) return tint(0x8a8c88, m.name, 0.05);
+      if (n.includes('screen')) return tint(0x203038, m.name, 0.02);
+      if (n.includes('light')) return tint(0xd8d4c2, m.name, 0.02);
+      if (n.includes('floor')) return tint(0x3d4340, m.name + mi, 0.03);
+      if (n.includes('decoration')) return tint(0x565b52, m.name + mi, 0.05);
+      return tint(0x494f4c, m.name + mi, 0.04); // walls / device racks
+    };
+    const cab = bakeVariant('plane-cabin0', all.filter(isInterior), cabColor, 6000, 0.08, true, 100);
+    applyVehicleTransformLike(cab, dim, planeScale);
+    variantsByKind['veh-plane-cabin'] = [cab];
   }
 }
 

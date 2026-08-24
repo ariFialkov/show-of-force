@@ -14,7 +14,7 @@ import { RISK_FACTORS } from '../config.js';
 import { buildWorld } from './world.js';
 import { Effects, sound } from './effects.js';
 import { EnemyBot, Comrade } from './bots.js';
-import { makeVehicle, makeCar, makeCivilian, makeObjectiveProp, makeGate, makeBackupViewmodel, makeWeaponViewmodel, makeRiggedViewmodel, makeThrownWeapon, animateWalk, poseIdle, poseFire, poseSit, syncWeaponStance } from './models.js';
+import { makeVehicle, makeCar, makeCivilian, makeObjectiveProp, makeGate, makeBackupViewmodel, makeWeaponViewmodel, makeRiggedViewmodel, makeThrownWeapon, makeJumpPlane, PLANE_CABIN, animateWalk, poseIdle, poseFire, poseSit, syncWeaponStance } from './models.js';
 
 // Squad backup weapons (hold FIRE on mobile / N on desktop to switch)
 const BACKUPS = {
@@ -417,47 +417,67 @@ export class Game {
     else if (fwd.x > 0.5) dWall = start.x - (b.minX - 4) * S;
     else if (fwd.x < -0.5) dWall = (b.maxX + 4) * S - start.x;
     const gatePos = start.clone().addScaledVector(fwd, -dWall);
-    const stopPos = start.clone().addScaledVector(fwd, -(dWall + 7));
 
-    if (type === 'parachute') {
-      this.vehicle = makeVehicle('parachute');
-      this.scene.add(this.vehicle);
-      this.preludeChutes = this.comrades.map(() => {
-        const c = makeVehicle('parachute');
-        this.scene.add(c);
-        return c;
-      });
-      // the jump plane thunders over the DZ while the sticks are in the air
-      this.preludePlane = makeVehicle('plane');
-      if (this.preludePlane) this.scene.add(this.preludePlane);
-      this.prelude = { kind: 'drop', t: 0, dur: 6.2, start, yaw };
-    } else {
-      this.vehicle = makeVehicle(type);
-      this.scene.add(this.vehicle);
-      this.prelude = {
-        kind: 'drive', t: 0,
-        approach: 4.6, dismount: 2.0, fadeHold: 0.55,
-        p0: stopPos.clone().addScaledVector(fwd, -46).addScaledVector(lat, 26),
-        p1: stopPos.clone().addScaledVector(fwd, -20).addScaledVector(lat, 6),
-        p2: stopPos, gatePos, start, fwd, lat, yaw,
-        breachFired: false, fadeStarted: false,
-        // baked vehicles carry their own seat layout; the fallback fits the
-        // procedural humvee-scale hulls
-        seats: (this.vehicle.userData.seats ?? [
-          new THREE.Vector3(-0.45, 1.02, 0.55),
-          new THREE.Vector3(0.5, 1.02, -0.6),
-          new THREE.Vector3(-0.5, 1.02, -0.6)
-        ]).map((s) => s.clone()),
-        // crane shot: high 3/4 dolly, outside the walls
-        craneFrom: stopPos.clone().addScaledVector(fwd, -32).addScaledVector(lat, 27).setY(16),
-        craneTo: stopPos.clone().addScaledVector(fwd, -11).addScaledVector(lat, 15).setY(8.5),
-        // gate shot: low angle beside the entrance
-        gateCam: gatePos.clone().addScaledVector(fwd, -3.2).addScaledVector(lat, 8).setY(2.3),
-        lookSmooth: null
-      };
-    }
+    if (type === 'parachute') this.startJumpPrelude(yaw, fwd, lat, start);
+    else this.startDrivePrelude(type, yaw, fwd, lat, start, gatePos, dWall);
     this.cb.onCinematicStart?.();
     sound.step();
+  }
+
+  // FPV ride-in: seated on the vehicle with the squad, drive through the
+  // perimeter gate right up to the compound entrance, sequential dismount,
+  // then a short walk onto the spawn point — one continuous camera.
+  startDrivePrelude(type, yaw, fwd, lat, start, gatePos, dWall) {
+    this.vehicle = makeVehicle(type);
+    this.scene.add(this.vehicle);
+    const boat = type === 'boat';
+    const stop = start.clone().addScaledVector(fwd, -5.4);
+    this.prelude = {
+      kind: 'fpvDrive', t: 0, type, yaw, fwd, lat, start, gatePos, boat,
+      p0: stop.clone().addScaledVector(fwd, -(dWall + (boat ? 62 : 46))).addScaledVector(lat, boat ? 9 : 18),
+      p1: stop.clone().addScaledVector(fwd, -dWall * 0.45).addScaledVector(lat, boat ? 1.5 : 3.5),
+      p2: stop,
+      rideDur: boat ? 6.4 : 5.8,
+      stagger: [0.25, 0.95, 1.65],
+      hopDur: 1.0,
+      playerOut: 2.55, playerOutDur: 1.05, advanceDur: 1.7,
+      seats: (this.vehicle.userData.seats ?? [
+        new THREE.Vector3(-0.5, 1.0, -0.6),
+        new THREE.Vector3(0.5, 1.0, -0.6),
+        new THREE.Vector3(0, 1.0, -1.4)
+      ]).map((v) => v.clone()),
+      pSeat: (this.vehicle.userData.playerSeat ?? new THREE.Vector3(0.55, 1.0, 0.3)).clone(),
+      gateHit: false, dismStarted: [false, false, false], vmOut: false,
+      lookSmooth: null, vehYaw: yaw
+    };
+  }
+
+  // FPV static-line jump: ride the cabin, tail door swings open, the stick
+  // goes out the ramp one by one, you walk the ramp and step off — freefall
+  // watching the plane recede, canopy, landing at the spawn point.
+  startJumpPrelude(yaw, fwd, lat, start) {
+    const plane = makeJumpPlane();
+    this.preludePlane = plane;
+    if (plane) this.scene.add(plane);
+    this.vehicle = makeVehicle('parachute');
+    this.vehicle.visible = false;
+    this.scene.add(this.vehicle);
+    this.preludeChutes = this.comrades.map(() => {
+      const c = makeVehicle('parachute');
+      c.visible = false;
+      this.scene.add(c);
+      return c;
+    });
+    this.prelude = {
+      kind: 'fpvJump', t: 0, yaw, fwd, lat, start,
+      alt: 53, speed: 24,
+      doorT0: 1.1, doorT1: 3.4, greenT: 3.6,
+      exits: [3.9, 4.55, 5.2], runDur: 0.75,
+      playerExitT: 5.8, walkDur: 1.0, stepOffT: 6.8,
+      chuteAlt: 33, landDur: 0.45,
+      exitStarted: [false, false, false], greenLit: false, vmOut: false,
+      landT: null, lookSmooth: null
+    };
   }
 
   lookToward(target, dt, speed = 3) {
@@ -469,8 +489,8 @@ export class Game {
   finishPrelude() {
     const pr = this.prelude;
     if (this.viewmodelPrimary) this.viewmodelPrimary.visible = true;
-    // authoritative reset: player and squad are PLACED at the spawn
-    // formation (the fade hides this), so game state is always intact
+    // authoritative reset: the choreography ends AT the spawn formation, so
+    // these snaps are visually no-ops — they just guarantee game state
     this.camera.position.set(pr.start.x, EYE, pr.start.z);
     this.camera.rotation.set(0, this.controls.yaw, 0, 'YXZ');
     this.player.pos.set(pr.start.x, EYE, pr.start.z);
@@ -485,11 +505,7 @@ export class Game {
       for (const c of this.preludeChutes) this.scene.remove(c);
       this.preludeChutes = null;
     }
-    if (this.preludePlane) {
-      this.scene.remove(this.preludePlane);
-      this.preludePlane = null;
-    }
-    if (pr.kind === 'drop' && this.vehicle) this.vehicle.visible = false;
+    if (pr.kind === 'fpvJump' && this.vehicle) this.vehicle.visible = false;
     this.prelude = null;
     this.mode = 'play';
     this.round.segTime = 0;
@@ -499,60 +515,29 @@ export class Game {
     this.cb.onDismount?.();
   }
 
+  // column slot for comrade i, in world space at the spawn formation
+  comradeSlotPos(i, start, fwd) {
+    const colOffset = this.comradeSlots[i] - this.playerSlot;
+    return start.clone().addScaledVector(fwd, -colOffset * COLUMN_SPACING).setY(0);
+  }
+
   updatePrelude(dt) {
     const pr = this.prelude;
     if (!pr) return;
     pr.t += dt;
+    // the squad and the first-person arms animate through the whole ride
+    for (const c of this.comrades) c.group.userData.tick?.(dt);
+    this.viewmodel?.userData?.tick?.(dt);
+    if (pr.kind === 'fpvJump') this.updateFpvJump(dt);
+    else this.updateFpvDrive(dt);
+  }
+
+  updateFpvDrive(dt) {
+    const pr = this.prelude;
     const t = pr.t;
-    const ease = (v) => THREE.MathUtils.clamp(v, 0, 1) ** 2 * (3 - 2 * THREE.MathUtils.clamp(v, 0, 1));
-
-    if (pr.kind === 'drop') {
-      // static-line jump: the squad floats down around you
-      const e = ease(t / pr.dur);
-      const alt = (1 - e) * 55;
-      const sway = 1 - e;
-      // the jump plane you just left, droning away ahead of the stick — it
-      // sits below the falling camera's downward sightline so it actually
-      // crosses the frame instead of passing unseen overhead
-      if (this.preludePlane) {
-        const fx = -Math.sin(pr.yaw), fz = -Math.cos(pr.yaw);
-        const along = 6 + t * 42;
-        this.preludePlane.position.set(
-          pr.start.x + fx * along, 52, pr.start.z + fz * along
-        );
-        this.preludePlane.rotation.y = Math.atan2(fx, fz);
-        this.preludePlane.visible = t < pr.dur * 0.75;
-      }
-      this.camera.position.set(
-        pr.start.x + Math.sin(t * 1.3) * sway * 2.2,
-        EYE + alt,
-        pr.start.z + Math.cos(t * 1.1) * sway * 2.2
-      );
-      this.camera.rotation.set(-0.5 * sway, pr.yaw, Math.sin(t) * 0.06 * sway, 'YXZ');
-      this.vehicle.position.copy(this.camera.position);
-      this.vehicle.position.y -= 1.4;
-      this.vehicle.rotation.y = pr.yaw;
-      this.vehicle.visible = alt > 2;
-      for (let i = 0; i < this.comrades.length; i++) {
-        const ang = (i / 3) * Math.PI * 2 + 0.7;
-        const cAlt = Math.max(0, alt + 4 + i * 2);
-        const cx = pr.start.x + Math.cos(ang) * 4.5 + Math.sin(t * 1.1 + i) * sway;
-        const cz = pr.start.z + Math.sin(ang) * 4.5 + Math.cos(t * 0.9 + i) * sway;
-        this.comrades[i].setPosition(new THREE.Vector3(cx, cAlt, cz), pr.yaw + Math.PI);
-        // seated-harness posture under canopy, upright for the landing
-        if (cAlt > 3) poseSit(this.comrades[i].group, t * 3 + i);
-        else poseIdle(this.comrades[i].group, t * 3 + i);
-        const chute = this.preludeChutes[i];
-        chute.position.set(cx, cAlt + 0.1, cz);
-        chute.rotation.y = pr.yaw;
-        chute.visible = cAlt > 1.5;
-      }
-      if (t >= pr.dur) this.finishPrelude();
-      return;
-    }
-
-    // ---- drive-in cutscene: exterior camera work, fade-cut into FPS
-    const tApp = pr.approach, tDis = tApp + pr.dismount, tEnd = tDis + pr.fadeHold;
+    const clamp01 = (v) => THREE.MathUtils.clamp(v, 0, 1);
+    const ease = (v) => clamp01(v) ** 2 * (3 - 2 * clamp01(v));
+    const vmRig = this.viewmodel?.userData?.rig;
     const bez = (u) => {
       const w = 1 - u;
       return new THREE.Vector3(
@@ -563,70 +548,324 @@ export class Game {
     };
     const smoothLook = (target, snap = false) => {
       if (!pr.lookSmooth || snap) pr.lookSmooth = target.clone();
-      else pr.lookSmooth.lerp(target, Math.min(1, dt * 5));
+      else pr.lookSmooth.lerp(target, Math.min(1, dt * 4));
       this.camera.lookAt(pr.lookSmooth);
     };
+    const seatCam = () => {
+      const eye = pr.pSeat.clone();
+      eye.y += 0.62;
+      const p = this.vehicle.localToWorld(eye);
+      p.y += Math.sin(t * 9.2) * 0.012 + Math.sin(t * 13.7) * 0.006; // engine judder
+      this.camera.position.copy(p);
+    };
 
-    if (t < tApp) {
-      // SHOT 1 — crane wide: track the vehicle curving in toward the gate
-      const u = ease(t / tApp);
+    if (t < pr.rideDur) {
+      // ---- RIDE: seated FPV, vehicle curving in through the outer gate
+      const u = ease(t / pr.rideDur);
       const pos = bez(u);
       const ahead = bez(Math.min(1, u + 0.02));
       tmpV.subVectors(ahead, pos);
       if (tmpV.lengthSq() > 1e-6) pr.vehYaw = Math.atan2(tmpV.x, tmpV.z);
       this.vehicle.position.copy(pos);
-      this.vehicle.position.y = Math.abs(Math.sin(t * 6.5)) * 0.04 * (1 - u);
-      this.vehicle.rotation.y = pr.vehYaw ?? pr.yaw;
+      this.vehicle.rotation.set(0, pr.vehYaw, 0);
+      if (pr.boat) {
+        // skimming in over the water, then grinding up onto the sand
+        const beach = ease((u - 0.78) / 0.14);
+        this.vehicle.position.y = -0.17 * (1 - beach) + 0.05 * beach;
+        this.vehicle.rotation.x = -0.055 * Math.sin(beach * Math.PI); // bow lifts as it grounds
+        if (beach > 0 && beach < 1 && Math.random() < dt * 14) {
+          const bow = this.vehicle.localToWorld(new THREE.Vector3(0, 0.2, 2.2));
+          this.effects.impact(bow, 0xcfc2a2);
+        }
+        if (u < 0.7 && Math.random() < dt * 5) {
+          const wake = this.vehicle.localToWorld(new THREE.Vector3((Math.random() - 0.5) * 1.6, 0, 2.4));
+          this.effects.smokePuff(wake.setY(0.1));
+        }
+      } else {
+        this.vehicle.position.y = Math.abs(Math.sin(t * 6.5)) * 0.05 * (1 - u);
+      }
+      // punching through the outer gate: dust and a jolt
+      if (!pr.gateHit && pos.distanceTo(pr.gatePos) < 4.5) {
+        pr.gateHit = true;
+        this.shake = 0.32;
+        sound.burst({ dur: 0.25, freq: 260, gain: 0.3 });
+        for (const side of [-1, 1]) {
+          const p = this.vehicle.localToWorld(new THREE.Vector3(side * 1.6, 0.6, 1.8));
+          this.effects.impact(p);
+        }
+      }
       this.vehicle.updateMatrixWorld();
-
-      // squad visibly riding along
       for (let i = 0; i < this.comrades.length; i++) {
         const world = this.vehicle.localToWorld(pr.seats[i].clone());
-        const c = this.comrades[i];
-        c.setPosition(world, (pr.vehYaw ?? pr.yaw) + (pr.seats[i].z > 0 ? Math.PI : 0));
-        poseSit(c.group, t * 3 + i * 1.7);
+        this.comrades[i].setPosition(world, pr.vehYaw + (pr.seats[i].z > 0 ? Math.PI : 0));
+        poseSit(this.comrades[i].group, t * 3 + i * 1.7);
       }
+      seatCam();
+      vmRig?.play?.('sit', { fade: 0.3 });
+      // gaze runs along the player's own flank of the vehicle, so a
+      // centreline turret or cab never fills the frame
+      const lookPt = this.vehicle.localToWorld(
+        new THREE.Vector3(pr.pSeat.x * 1.1, pr.pSeat.y + 0.85, 16)
+      );
+      smoothLook(lookPt, t < dt * 2);
+      return;
+    }
 
-      this.camera.position.lerpVectors(pr.craneFrom, pr.craneTo, ease(t / tApp));
-      smoothLook(this.vehicle.position.clone().setY(1.2), t < dt * 2);
-    } else if (t < tDis) {
-      // SHOT 2 — low angle at the gate: dismount, breach, run inside
-      const tD = t - tApp;
-      if (!pr.gateCut) {
-        pr.gateCut = true;
-        this.camera.position.copy(pr.gateCam);
-        smoothLook(pr.gatePos.clone().addScaledVector(pr.fwd, -3).setY(1.2), true);
-      }
-      if (!pr.breachFired && tD > 0.9) {
-        pr.breachFired = true;
-        this.effects.explosion(pr.gatePos.clone().setY(1.1));
-        sound.explosion();
-        this.shake = 0.3;
-      }
-      for (let i = 0; i < this.comrades.length; i++) {
-        const c = this.comrades[i];
-        const k = ease((tD - i * 0.28) / 1.35);
-        const seatWorld = this.vehicle.localToWorld(pr.seats[i].clone()).setY(0);
-        const inside = pr.gatePos.clone()
-          .addScaledVector(pr.fwd, 2.2)
-          .addScaledVector(pr.lat, (i - 1) * 1.4);
-        const pos = new THREE.Vector3().lerpVectors(seatWorld, inside, k);
-        pos.y = 0;
-        const faceYaw = Math.atan2(pr.gatePos.x - pos.x, pr.gatePos.z - pos.z);
-        c.setPosition(pos, faceYaw);
-        if (k > 0.02 && k < 0.98) animateWalk(c.group, t * 6.5, 1.1);
+    // ---- vehicle parked at the compound entrance
+    const td = t - pr.rideDur;
+    this.vehicle.position.copy(pr.p2);
+    this.vehicle.position.y = pr.boat ? 0.05 : 0;
+    this.vehicle.rotation.set(0, pr.vehYaw ?? pr.yaw, 0);
+    this.vehicle.updateMatrixWorld();
+
+    // comrades hop down in sequence, then jog to their column slots
+    for (let i = 0; i < this.comrades.length; i++) {
+      const c = this.comrades[i];
+      const tau = td - pr.stagger[i];
+      const seatWorld = this.vehicle.localToWorld(pr.seats[i].clone());
+      const spot = pr.p2.clone()
+        .addScaledVector(pr.fwd, 2.4)
+        .addScaledVector(pr.lat, (i - 1) * 1.8);
+      if (tau < 0) {
+        c.setPosition(seatWorld, (pr.vehYaw ?? pr.yaw) + (pr.seats[i].z > 0 ? Math.PI : 0));
+        poseSit(c.group, t * 3 + i * 1.7);
+      } else if (tau < pr.hopDur) {
+        if (!pr.dismStarted[i]) {
+          pr.dismStarted[i] = true;
+          c.group.userData.rig?.play?.('dismount', { fade: 0.1, once: true, force: true });
+          if (tau < 0.3) sound.step();
+        }
+        const k = ease(tau / pr.hopDur);
+        const p = new THREE.Vector3().lerpVectors(seatWorld, spot, k);
+        p.y = seatWorld.y * (1 - k) + Math.sin(k * Math.PI) * 0.18;
+        const faceYaw = Math.atan2(spot.x - seatWorld.x, spot.z - seatWorld.z);
+        c.setPosition(p, faceYaw);
+      } else {
+        const slot = this.comradeSlotPos(i, pr.start, pr.fwd);
+        const k2 = clamp01((tau - pr.hopDur) / 1.35);
+        const p = new THREE.Vector3().lerpVectors(spot, slot, ease(k2));
+        const faceYaw = k2 < 0.97
+          ? Math.atan2(slot.x - spot.x, slot.z - spot.z)
+          : this.controls.yaw + Math.PI;
+        c.setPosition(p.setY(0), faceYaw);
+        if (k2 < 0.97) animateWalk(c.group, t * 6, 1.1);
         else poseIdle(c.group, t * 3 + i);
       }
-      smoothLook(pr.gatePos.clone().setY(1.2));
-    } else if (t < tEnd) {
-      // fade out, then the squad is PLACED at the spawn formation
-      if (!pr.fadeStarted) {
-        pr.fadeStarted = true;
-        this.cb.onPreludeFade?.(true);
-      }
-    } else {
-      this.finishPrelude();
     }
+
+    // player: stay seated watching the squad go, then hop down and walk on
+    const tp = td - pr.playerOut;
+    const ground = pr.p2.clone()
+      .addScaledVector(pr.fwd, 1.9)
+      .addScaledVector(pr.lat, pr.pSeat.x > 0 ? 1.5 : -1.5);
+    if (tp < 0) {
+      seatCam();
+      // glance toward the comrades pouring out ahead, offset to the
+      // player's side so the hull doesn't block the view
+      const mid = pr.p2.clone()
+        .addScaledVector(pr.fwd, 3.4)
+        .addScaledVector(pr.lat, Math.sign(pr.pSeat.x) * 1.4)
+        .setY(1.0);
+      smoothLook(mid);
+      vmRig?.play?.('sit', { fade: 0.3 });
+    } else if (tp < pr.playerOutDur) {
+      if (!pr.vmOut) {
+        pr.vmOut = true;
+        vmRig?.play?.('dismount', { fade: 0.12, once: true, force: true });
+      }
+      const k = ease(tp / pr.playerOutDur);
+      const eye = pr.pSeat.clone();
+      eye.y += 0.62;
+      const seatEye = this.vehicle.localToWorld(eye);
+      const p = new THREE.Vector3().lerpVectors(seatEye, ground.clone().setY(EYE), k);
+      p.y = THREE.MathUtils.lerp(seatEye.y, EYE, k) + Math.sin(k * Math.PI) * 0.22;
+      this.camera.position.copy(p);
+      if (k > 0.94 && !pr.landed) {
+        pr.landed = true;
+        this.shake = 0.12;
+        sound.step();
+      }
+      smoothLook(pr.start.clone().addScaledVector(pr.fwd, 8).setY(1.3));
+    } else {
+      const ta = tp - pr.playerOutDur;
+      const k = ease(ta / pr.advanceDur);
+      vmRig?.play?.('aim', { fade: 0.25 });
+      const p = new THREE.Vector3().lerpVectors(ground.clone().setY(EYE), pr.start.clone().setY(EYE), k);
+      p.y = EYE + Math.abs(Math.sin(ta * 7.5)) * 0.045 * (1 - k * 0.5);
+      this.camera.position.copy(p);
+      smoothLook(pr.start.clone().addScaledVector(pr.fwd, 40).setY(EYE), false);
+      if (ta >= pr.advanceDur) this.finishPrelude();
+    }
+  }
+
+  updateFpvJump(dt) {
+    const pr = this.prelude;
+    const t = pr.t;
+    const P = PLANE_CABIN;
+    const clamp01 = (v) => THREE.MathUtils.clamp(v, 0, 1);
+    const ease = (v) => clamp01(v) ** 2 * (3 - 2 * clamp01(v));
+    const vmRig = this.viewmodel?.userData?.rig;
+    const plane = this.preludePlane;
+    const planeYaw = Math.atan2(pr.fwd.x, pr.fwd.z);
+    const planeAt = (tt) => pr.start.clone()
+      .addScaledVector(pr.fwd, pr.speed * (tt - pr.stepOffT))
+      .setY(pr.alt);
+    const smoothLook = (target, snap = false, rate = 3.2) => {
+      if (!pr.lookSmooth || snap) pr.lookSmooth = target.clone();
+      else pr.lookSmooth.lerp(target, Math.min(1, dt * rate));
+      this.camera.lookAt(pr.lookSmooth);
+    };
+    // freefall profile: quadratic to terminal velocity, then linear
+    const FA = 7.5, VT = 16.5;
+    const tauLin = VT / (2 * FA);
+    const freeDrop = (tau) => tau < tauLin ? FA * tau * tau : FA * tauLin * tauLin + VT * (tau - tauLin);
+    // canopy: decel from VT to a steady sink, closed form
+    const chuteDrop = (u) => 3.5 * u + (VT - 3.5) * 0.5 * (1 - Math.exp(-u / 0.5));
+    const forwardCarry = (tau) => pr.speed * 1.5 * (1 - Math.exp(-tau / 1.5));
+    // altitude of a jumper `tau` seconds after leaving the ramp
+    const jumperY = (y0, tau) => {
+      const yFree = y0 - freeDrop(tau);
+      if (yFree > pr.chuteAlt) return { y: yFree, chuted: false };
+      // find the crossing time, then ride the canopy profile below it
+      let lo = 0, hi = tau;
+      for (let it = 0; it < 20; it++) {
+        const mid = (lo + hi) / 2;
+        (y0 - freeDrop(mid) > pr.chuteAlt) ? lo = mid : hi = mid;
+      }
+      return { y: pr.chuteAlt - chuteDrop(tau - lo), chuted: true };
+    };
+
+    if (!plane) { this.finishPrelude(); return; }
+
+    // plane flies its line the whole time, door and light animate with it
+    plane.position.copy(planeAt(t));
+    plane.rotation.y = planeYaw;
+    plane.visible = t < pr.stepOffT + 7;
+    const doorK = ease((t - pr.doorT0) / (pr.doorT1 - pr.doorT0));
+    plane.userData.ramp.rotation.x = THREE.MathUtils.lerp(P.doorClosed, P.doorOpen, doorK);
+    if (t > pr.greenT && !pr.greenLit) {
+      pr.greenLit = true;
+      plane.userData.jumpLight.material.color.setHex(0x30c048);
+      sound.click();
+    }
+    plane.updateMatrixWorld();
+
+    const cabinSeats = [P.seatL, P.seatL2, P.seatR2].map((a) => new THREE.Vector3(...a));
+    const lip = new THREE.Vector3(...P.rampLip);
+
+    // ---- the stick goes out the door one at a time
+    for (let i = 0; i < this.comrades.length; i++) {
+      const c = this.comrades[i];
+      const te = pr.exits[i];
+      const tau = t - te;
+      const chute = this.preludeChutes?.[i];
+      if (tau < 0) {
+        const world = plane.localToWorld(cabinSeats[i].clone());
+        c.setPosition(world, planeYaw + (cabinSeats[i].x < 0 ? Math.PI / 2 : -Math.PI / 2));
+        poseSit(c.group, t * 3 + i);
+        if (chute) chute.visible = false;
+      } else if (tau < pr.runDur) {
+        if (!pr.exitStarted[i]) {
+          pr.exitStarted[i] = true;
+          c.group.userData.rig?.play?.('run-jump', { fade: 0.08, once: true, force: true });
+          sound.step();
+        }
+        const k = ease(tau / pr.runDur);
+        const local = new THREE.Vector3().lerpVectors(
+          cabinSeats[i].clone(), lip.clone().setX(cabinSeats[i].x * 0.25), k
+        );
+        c.setPosition(plane.localToWorld(local), planeYaw + Math.PI);
+      } else {
+        // ballistic from the ramp lip of the plane AS IT WAS at exit time
+        const tj = tau - pr.runDur;
+        const exitPlanePos = planeAt(te + pr.runDur);
+        const exitPos = lip.clone().setX(cabinSeats[i].x * 0.25)
+          .applyAxisAngle(new THREE.Vector3(0, 1, 0), planeYaw)
+          .add(exitPlanePos);
+        const slot = this.comradeSlotPos(i, pr.start, pr.fwd);
+        const drop = jumperY(exitPos.y, tj);
+        const y = Math.max(0, drop.y);
+        const kAlt = clamp01(1 - y / exitPos.y);
+        const p = new THREE.Vector3(
+          THREE.MathUtils.lerp(exitPos.x + pr.fwd.x * forwardCarry(tj), slot.x, ease(kAlt)),
+          y,
+          THREE.MathUtils.lerp(exitPos.z + pr.fwd.z * forwardCarry(tj), slot.z, ease(kAlt))
+        );
+        c.setPosition(p, pr.yaw + Math.PI);
+        if (y <= 0.01) poseIdle(c.group, t * 3 + i);
+        else if (drop.chuted) poseSit(c.group, t * 2 + i);
+        else c.group.userData.rig?.play?.('fall', { fade: 0.2 });
+        if (chute) {
+          chute.visible = drop.chuted && y > 1.2;
+          chute.position.copy(p);
+          chute.position.y = y + 0.1;
+          chute.rotation.y = pr.yaw;
+        }
+      }
+    }
+
+    // ---- the player: seat → walk the ramp → step off → canopy → land
+    if (t < pr.playerExitT) {
+      const eye = new THREE.Vector3(...P.player);
+      eye.y += 0.62;
+      this.camera.position.copy(plane.localToWorld(eye));
+      vmRig?.play?.('sit', { fade: 0.3 });
+      // watching the door: down the cabin toward the opening ramp
+      smoothLook(plane.localToWorld(new THREE.Vector3(0, P.floor + 0.9, -11)), t < dt * 2);
+      return;
+    }
+    if (t < pr.stepOffT) {
+      const k = ease((t - pr.playerExitT) / pr.walkDur);
+      const eyeSeat = new THREE.Vector3(...P.player);
+      eyeSeat.y += 0.62;
+      const eyeLip = lip.clone().add(new THREE.Vector3(0, 1.62, 0.4));
+      const local = new THREE.Vector3().lerpVectors(eyeSeat, eyeLip, k);
+      local.y += Math.abs(Math.sin(k * Math.PI * 3)) * 0.05; // strides down the ramp
+      this.camera.position.copy(plane.localToWorld(local));
+      vmRig?.play?.('aim', { fade: 0.3 });
+      smoothLook(plane.localToWorld(new THREE.Vector3(0, P.floor - 4, -26)), false, 4.5);
+      return;
+    }
+    // free air
+    const tj = t - pr.stepOffT;
+    const exitPlanePos = planeAt(pr.stepOffT);
+    const exitPos = lip.clone().add(new THREE.Vector3(0, 1.62, 0.4))
+      .applyAxisAngle(new THREE.Vector3(0, 1, 0), planeYaw)
+      .add(exitPlanePos);
+    const drop = jumperY(exitPos.y, tj);
+    const y = Math.max(EYE, drop.y);
+    const kAlt = clamp01(1 - (y - EYE) / (exitPos.y - EYE));
+    const pos = new THREE.Vector3(
+      THREE.MathUtils.lerp(exitPos.x + pr.fwd.x * forwardCarry(tj), pr.start.x, ease(kAlt)),
+      y,
+      THREE.MathUtils.lerp(exitPos.z + pr.fwd.z * forwardCarry(tj), pr.start.z, ease(kAlt))
+    );
+    // landing beat: a short knee-dip once boots touch
+    if (drop.y <= EYE && pr.landT === null) pr.landT = t;
+    if (pr.landT !== null) {
+      const kLand = clamp01((t - pr.landT) / pr.landDur);
+      pos.y = EYE - Math.sin(Math.min(1, kLand) * Math.PI) * 0.2;
+      if (kLand === 0) { this.shake = 0.2; sound.step(); }
+      this.camera.position.copy(pos);
+      smoothLook(pr.start.clone().addScaledVector(pr.fwd, 40).setY(EYE), false, 6);
+      vmRig?.play?.('aim', { fade: 0.2 });
+      if (this.vehicle) this.vehicle.visible = false;
+      if (kLand >= 1) this.finishPrelude();
+      return;
+    }
+    this.camera.position.copy(pos);
+    vmRig?.play?.('fall', { fade: 0.4 });
+    // camera roll + gaze: plane first, then the LZ, then the horizon
+    if (this.vehicle) {
+      this.vehicle.visible = drop.chuted;
+      this.vehicle.position.copy(pos).add(new THREE.Vector3(0, 0.6, 0));
+      this.vehicle.rotation.y = pr.yaw;
+    }
+    let target;
+    if (tj < 1.5) target = plane.position.clone();
+    else if (!drop.chuted) target = pr.start.clone().addScaledVector(pr.fwd, 5).setY(2);
+    else target = pr.start.clone().addScaledVector(pr.fwd, 26).setY(EYE + 2);
+    smoothLook(target, tj < dt * 2, 2.6);
   }
 
   beginSegment(step, first = false) {

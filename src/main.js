@@ -20,6 +20,7 @@ const game = new Game(document.getElementById('gl'), {
 
 // debugging hooks (harmless in production; used by automated smoke tests)
 window.__game = game;
+import('three').then((m) => { window.__THREE = m; });
 import('./game/models.js').then((m) => { window.__makeSoldier = m.makeSoldier; window.__models = m; });
 import('./game/rigged.js').then((m) => { window.__rigged = m; });
 window.__forceLocation = (id) => {
@@ -250,7 +251,7 @@ import('./game/rigged.js').then(async ({ initRigged }) => {
   ui.els.deployingCount.textContent = '▚';
   ui.els.deploying.classList.remove('hidden');
   const propsP = import('./game/props.js')
-    .then((m) => m.initProps(import.meta.env.BASE_URL + 'models/props.bin'))
+    .then((m) => { window.__props = m; return m.initProps(import.meta.env.BASE_URL + 'models/props.bin'); })
     .catch(() => {});
   await initRigged(import.meta.env.BASE_URL + 'models/trooper.bin');
   await propsP;

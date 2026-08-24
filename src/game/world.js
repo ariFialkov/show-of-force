@@ -727,13 +727,22 @@ function collectWallEdges(map, pillarSet = new Set()) {
   const S = map.cellSize;
   const edges = [];
   const solid = (x, z) => !map.isCarved(x, z) && !pillarSet.has(`${x},${z}`);
+  // The spawn cell's rear edge (facing the insertion approach) is left
+  // open: the squad now rides IN through it during the no-cut insertion
+  // cinematic, and the vehicle parks in the opening afterwards. Collision
+  // still blocks the player (uncarved cells outside), so it never becomes
+  // an exploitable exit.
+  const a = map.path[0], b2 = map.path[1] ?? a;
+  const adx = Math.sign(b2.x - a.x), adz = Math.sign(b2.z - a.z);
+  const entryKey = `${a.x},${a.z}:${-adx},${-adz}`;
   // nx/nz point from the wall back into the carved cell it faces
   for (const c of map.carved) {
     const [x, z] = c.split(',').map(Number);
-    if (solid(x, z + 1)) edges.push({ x: x * S, z: z * S + S / 2, rotY: 0, nx: 0, nz: -1 });
-    if (solid(x, z - 1)) edges.push({ x: x * S, z: z * S - S / 2, rotY: 0, nx: 0, nz: 1 });
-    if (solid(x + 1, z)) edges.push({ x: x * S + S / 2, z: z * S, rotY: Math.PI / 2, nx: -1, nz: 0 });
-    if (solid(x - 1, z)) edges.push({ x: x * S - S / 2, z: z * S, rotY: Math.PI / 2, nx: 1, nz: 0 });
+    const skipDir = (dx, dz) => `${x},${z}:${dx},${dz}` === entryKey;
+    if (solid(x, z + 1) && !skipDir(0, 1)) edges.push({ x: x * S, z: z * S + S / 2, rotY: 0, nx: 0, nz: -1 });
+    if (solid(x, z - 1) && !skipDir(0, -1)) edges.push({ x: x * S, z: z * S - S / 2, rotY: 0, nx: 0, nz: 1 });
+    if (solid(x + 1, z) && !skipDir(1, 0)) edges.push({ x: x * S + S / 2, z: z * S, rotY: Math.PI / 2, nx: -1, nz: 0 });
+    if (solid(x - 1, z) && !skipDir(-1, 0)) edges.push({ x: x * S - S / 2, z: z * S, rotY: Math.PI / 2, nx: 1, nz: 0 });
   }
   return edges;
 }
