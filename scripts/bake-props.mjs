@@ -275,6 +275,10 @@ const variantsByKind = {};
 {
   console.log('leafy:');
   const obj = loadFbx('assets-src/props/leafy.fbx');
+  // source is Z-up (trunk runs 0 → +268 in Z) — stand it upright before
+  // baking; meshesOf reads matrixWorld, so rotating the root is enough
+  obj.rotation.x = -Math.PI / 2;
+  obj.updateMatrixWorld(true);
   const meshes = meshesOf(obj);
   const colorFor = (mesh, mi) => {
     const mats = Array.isArray(mesh.material) ? mesh.material : [mesh.material];

@@ -45,12 +45,12 @@ export async function initProps(url) {
 // A vegetation instance: random variant + a little scale variance. The
 // caller owns position/rotation. Returns null when the bin isn't loaded
 // (world.js falls back to its procedural builders).
-export function makeVegetation(kind, rng, { scale = 1 } = {}) {
+export function makeVegetation(kind, rng, { scale = 1, vary = true } = {}) {
   const list = kinds?.[kind];
   if (!list || list.length === 0) return null;
   const v = rng ? rng.pick(list) : list[Math.floor(Math.random() * list.length)];
   const mesh = new THREE.Mesh(v.geo, material);
-  const s = (rng ? rng.range(0.85, 1.15) : 1) * scale;
+  const s = (rng && vary ? rng.range(0.85, 1.15) : 1) * scale;
   mesh.scale.setScalar(s);
   const g = new THREE.Group();
   g.add(mesh);

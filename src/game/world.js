@@ -10,7 +10,7 @@ const lambert = (color, opts = {}) => new THREE.MeshLambertMaterial({ color, ...
 const BAKED_KIND = {
   palm: ['palm', 1], tree: ['leafy', 1], pine: ['fir', 1], fern: ['bush', 0.85],
   cactus: ['cactus', 1], rock: ['debris', 0.55], statue: ['statue', 1],
-  barrier: ['barrier', 1], debris: ['debris', 1], fountain: ['fountain', 1]
+  barrier: ['barrier', 1], debris: ['debris', 1], fountain: ['fountain', 2]
 };
 
 // --------------------------------------------------- procedural textures
@@ -941,24 +941,63 @@ function dressWorld(group, map, env, rng, K, edges, wallH) {
     if (v.userData.litter) sprinkle(px, pz, v.userData.litter);
   }
 
-  // ---- fountain: a wide centerpiece, so it gets an interior room cell
-  // (never a route cell — the squad shouldn't walk through it)
+  // ---- landmark props (fountain, statues)
+  //
+  // These read as deliberate centrepieces, so they never get the scatter
+  // pass's wall-hugging offsets. Every landmark sits on a cell CENTRE —
+  // which is equidistant from that cell's walls by construction — and
+  // claims a radius, so landmarks stay evenly spaced from one another.
+  const pathSet = new Set(map.path.map((p) => `${p.x},${p.z}`));
+  const roomSet = new Set();
+  for (const rm of map.rooms ?? []) {
+    for (let dx = -1; dx <= 1; dx++) {
+      for (let dz = -1; dz <= 1; dz++) roomSet.add(`${rm.x + dx},${rm.z + dz}`);
+    }
+  }
+  const claimed = []; // { x, z, r } world-space landmark footprints
+  const clearOf = (wx, wz, r) =>
+    claimed.every((c) => Math.hypot(c.x - wx, c.z - wz) >= c.r + r);
+
   if (list.includes('fountain')) {
-    const pathSet = new Set(map.path.map((p) => `${p.x},${p.z}`));
-    const interior = cellsInfo.filter((c) => c.dirs.length === 0 && !pathSet.has(c.key));
-    if (interior.length > 0) {
-      const c = rng.pick(interior);
+    const spot = pickPlazaCell(map, cellsInfo, roomSet, rng);
+    if (spot) {
       const f = makeProp('fountain', env, rng, K);
       if (f) {
-        f.position.set(c.x * S + rng.range(-0.5, 0.5), 0, c.z * S + rng.range(-0.5, 0.5));
+        f.position.set(spot.x * S, 0, spot.z * S);
         f.rotation.y = rng.range(0, Math.PI * 2);
         group.add(f);
+        claimed.push({ x: spot.x * S, z: spot.z * S, r: 6 });
       }
     }
   }
 
-  // ---- legacy freestanding props (vegetation, rubble, statues, tents…)
-  const scatterNames = legacyNames.filter((t) => t !== 'fountain');
+  if (list.includes('statue')) {
+    // most-open cells first, off the route spine and out of the checkpoint
+    // rooms; spacing is enforced against the fountain and each other
+    const open = rng.shuffle(cellsInfo.filter((c) => !roomSet.has(c.key)))
+      .sort((a, b) => a.dirs.length - b.dirs.length);
+    const want = rng.int(2, 4);
+    let placed = 0;
+    for (const c of open) {
+      if (placed >= want) break;
+      // open ground only (at most one wall side) so a statue always reads
+      // as standing in a space rather than shoved against a corner
+      if (c.dirs.length > 1) continue;
+      const wx = c.x * S, wz = c.z * S;
+      if (!clearOf(wx, wz, 5.5)) continue;
+      const st = makeProp('statue', env, rng, K);
+      if (!st) break;
+      st.position.set(wx, 0, wz);
+      st.rotation.y = rng.range(0, Math.PI * 2);
+      group.add(st);
+      claimed.push({ x: wx, z: wz, r: 5.5 });
+      placed++;
+    }
+  }
+
+  // ---- legacy freestanding props (vegetation, rubble, tents…). Landmarks
+  // are placed above, so they never join the wall-hugging scatter.
+  const scatterNames = legacyNames.filter((t) => t !== 'fountain' && t !== 'statue');
   if (scatterNames.length > 0) {
     const cells = [...map.carved];
     const n = Math.min(36, Math.floor(cells.length * 0.4));
@@ -1078,6 +1117,31 @@ function dressWorld(group, map, env, rng, K, edges, wallH) {
     lm.userData.noShadow = true;
     group.add(lm);
   }
+}
+
+// The centre of a "square room": a pillared courtyard's middle cell (its
+// four diagonal neighbours are the courtyard's pillar blocks) or, failing
+// that, the centre of a fully open 3x3 block of carved cells. Checkpoint
+// rooms are excluded — route gates and objective set-pieces stage there.
+function pickPlazaCell(map, cellsInfo, roomSet, rng) {
+  const pillarSet = new Set((map.pillars ?? []).map((p) => `${p.x},${p.z}`));
+  const courtyards = [], squares = [];
+  for (const c of cellsInfo) {
+    if (roomSet.has(c.key)) continue;
+    const isCourtyard =
+      pillarSet.has(`${c.x + 1},${c.z + 1}`) && pillarSet.has(`${c.x - 1},${c.z + 1}`) &&
+      pillarSet.has(`${c.x + 1},${c.z - 1}`) && pillarSet.has(`${c.x - 1},${c.z - 1}`);
+    if (isCourtyard) { courtyards.push(c); continue; }
+    let open = true;
+    for (let dx = -1; dx <= 1 && open; dx++) {
+      for (let dz = -1; dz <= 1; dz++) {
+        if (!map.isCarved(c.x + dx, c.z + dz)) { open = false; break; }
+      }
+    }
+    if (open) squares.push(c);
+  }
+  const pool = courtyards.length > 0 ? courtyards : squares;
+  return pool.length > 0 ? rng.pick(pool) : null;
 }
 
 // ------------------------------------------------------------ vignettes
@@ -1524,7 +1588,9 @@ function makeMount(kind, K, env, rng, wallH) {
 function makeProp(type, env, rng, K) {
   if (BAKED_KIND[type]) {
     const [kind, scale] = BAKED_KIND[type];
-    const baked = makeVegetation(kind, rng, { scale });
+    // the fountain is a fixed-size centrepiece; everything else gets the
+    // usual per-instance size variance
+    const baked = makeVegetation(kind, rng, { scale, vary: type !== 'fountain' });
     if (baked) return baked;
   }
   const g = new THREE.Group();
