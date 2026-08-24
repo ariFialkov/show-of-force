@@ -58,11 +58,12 @@ export async function initRigged(url) {
       clips[c.name] = new THREE.AnimationClip(c.name, c.duration, tracks);
     }
 
-    // Split masks so a reload can run on the upper body while the legs keep
-    // their locomotion. The source reload clip has static legs, which looks
-    // wrong on a moving bot. Two complementary variants are baked:
-    //   reload-upper   torso + arms + head only
-    //   <clip>-lower   hips + legs only, for every clip a reload can sit on
+    // Split masks so an upper-body gesture (reload, knife stance, knife
+    // throw) can run while the legs keep their locomotion — those source
+    // clips all have static legs, which looks wrong on a moving bot. Two
+    // complementary variants are baked:
+    //   <clip>-upper   torso + arms + head only (the gesture clips)
+    //   <clip>-lower   hips + legs only, for every clip a gesture can sit on
     // Because the masks don't overlap, no bone is ever driven by two actions
     // at once (which would blend them and dilute both).
     const LOWER = [
@@ -73,10 +74,16 @@ export async function initRigged(url) {
       const node = trackName.split('.')[0];
       return LOWER.some((b) => node.endsWith(b));
     };
-    if (clips.reload) {
-      clips['reload-upper'] = new THREE.AnimationClip(
-        'reload-upper', clips.reload.duration, clips.reload.tracks.filter((t) => !isLower(t.name))
+    const UPPER_GESTURES = ['reload', 'knife-idle', 'knife-throw'];
+    let anyGesture = false;
+    for (const src of UPPER_GESTURES) {
+      if (!clips[src]) continue;
+      anyGesture = true;
+      clips[`${src}-upper`] = new THREE.AnimationClip(
+        `${src}-upper`, clips[src].duration, clips[src].tracks.filter((t) => !isLower(t.name))
       );
+    }
+    if (anyGesture) {
       for (const base of ['idle', 'aim', 'fire', 'walk', 'run', 'crouch-idle', 'crouch-walk', 'unarmed-run']) {
         const c = clips[base];
         if (!c) continue;
@@ -363,6 +370,7 @@ function blobShadow(radius) {
 export function makeRiggedSoldier(camo, { rifle = true, mask = true, civilian = false, headgear = null, armsOnly = false, weapon = 'rifle', backupWeapon = null } = {}) {
   const outer = new THREE.Group();
   outer.userData.civilian = civilian;
+  outer.userData.currentWeapon = rifle ? weapon : null;
 
   const { root: boneRoot, map: boneMap, bones } = buildBones();
   const skeleton = new THREE.Skeleton(bones, template.boneInverses.map((m) => m.clone()));
@@ -428,10 +436,12 @@ export function makeRiggedSoldier(camo, { rifle = true, mask = true, civilian = 
   // back control.
   const play = (name, { fade = 0.18, once = false, timeScale = 1, force = false } = {}) => {
     // a one-shot (death, hit reaction, full-body reload) takes the whole
-    // skeleton back — cancel any running partial-body overlay first
+    // skeleton back — cancel any running partial-body overlay first. The
+    // per-frame stance sync re-establishes a persistent loop afterwards.
     if (once && rigState.overlay) {
       actions[rigState.overlay]?.stop();
       rigState.overlay = null;
+      rigState.overlayLoop = null;
     }
     // while an upper-body overlay runs, the base clip drives ONLY the lower
     // body, so the overlay owns the torso and arms outright. The bot logic
@@ -458,34 +468,68 @@ export function makeRiggedSoldier(camo, { rifle = true, mask = true, civilian = 
     rigState.current = name;
     return true;
   };
-  // Overlay channel: a one-shot clip whose tracks cover only part of the
-  // skeleton (e.g. reload-upper) layered on top of the base action — the
-  // base keeps driving whatever bones the overlay doesn't touch.
-  const playOverlay = (name, { fade = 0.12, timeScale = 1 } = {}) => {
+  // Overlay channel: a clip whose tracks cover only part of the skeleton
+  // (reload-upper, knife-idle-upper…) layered on top of the base action —
+  // the base keeps driving whatever bones the overlay doesn't touch.
+  // `loop: true` makes it a persistent stance (knife carry) that survives
+  // base changes and one-shot overlays: a one-shot fired on top of a stance
+  // (the knife throw) crossfades back into the stance when it finishes.
+  const playOverlay = (name, { fade = 0.12, timeScale = 1, loop = false } = {}) => {
     const a = actions[name];
-    if (!a || rigState.overlay || rigState.busy) return 0;
-    const base = rigState.current;
+    if (!a || rigState.busy) return 0;
+    if (rigState.overlay === name) return a.getClip().duration / timeScale;
+    const base = rigState.current?.endsWith('-lower')
+      ? rigState.current.slice(0, -'-lower'.length)
+      : rigState.current;
     // the base must have a lower-body-only twin, otherwise both actions
     // would fight over the torso
     if (!base || !actions[`${base}-lower`]) return 0;
+    const prev = rigState.overlay ? actions[rigState.overlay] : null;
     a.reset();
-    a.setLoop(THREE.LoopOnce, 1);
-    a.clampWhenFinished = true;
+    a.setLoop(loop ? THREE.LoopRepeat : THREE.LoopOnce, loop ? Infinity : 1);
+    a.clampWhenFinished = !loop;
     a.timeScale = timeScale;
     a.setEffectiveWeight(1);
-    a.fadeIn(fade);
     a.play();
+    if (prev && prev !== a) a.crossFadeFrom(prev, fade, false);
+    else a.fadeIn(fade);
     rigState.overlay = name;
+    if (loop) rigState.overlayLoop = name;
     play(base, { fade: 0.1 }); // remaps to `${base}-lower` now the overlay is up
     return a.getClip().duration / timeScale;
   };
+  // Drop the overlay channel entirely and hand the whole skeleton back to
+  // the base clip (leaving a knife stance, or aborting one mid-gesture).
+  const stopOverlay = (fade = 0.2) => {
+    if (!rigState.overlay) return;
+    actions[rigState.overlay]?.fadeOut(fade);
+    rigState.overlay = null;
+    rigState.overlayLoop = null;
+    if (rigState.current?.endsWith('-lower')) {
+      play(rigState.current.slice(0, -'-lower'.length), { fade });
+    }
+  };
   mixer?.addEventListener('finished', (e) => {
     if (rigState.overlay && e.action === actions[rigState.overlay]) {
-      e.action.fadeOut(0.2);
-      rigState.overlay = null;
-      // hand the upper body back to the full-skeleton base clip
-      if (rigState.current?.endsWith('-lower')) {
-        play(rigState.current.slice(0, -'-lower'.length), { fade: 0.2 });
+      const back = rigState.overlayLoop && rigState.overlayLoop !== rigState.overlay
+        ? actions[rigState.overlayLoop] : null;
+      if (back) {
+        // one-shot gesture over a stance: settle back into the stance loop
+        back.reset();
+        back.setLoop(THREE.LoopRepeat, Infinity);
+        back.clampWhenFinished = false;
+        back.setEffectiveWeight(1);
+        back.play();
+        back.crossFadeFrom(e.action, 0.16, false);
+        rigState.overlay = rigState.overlayLoop;
+      } else {
+        e.action.fadeOut(0.2);
+        rigState.overlay = null;
+        rigState.overlayLoop = null;
+        // hand the upper body back to the full-skeleton base clip
+        if (rigState.current?.endsWith('-lower')) {
+          play(rigState.current.slice(0, -'-lower'.length), { fade: 0.2 });
+        }
       }
     } else {
       rigState.busy = false;
@@ -580,6 +624,9 @@ export function makeRiggedSoldier(camo, { rifle = true, mask = true, civilian = 
         r.visible = !toBackup;
         rB.visible = toBackup;
         outer.userData.parts.muzzle = toBackup ? mB : muzzle;
+        // the per-frame stance sync watches this to swap carry styles
+        // (the knife is held one-handed, not shouldered like a rifle)
+        outer.userData.currentWeapon = toBackup ? backupWeapon : weapon;
         return true;
       };
     }
@@ -620,7 +667,7 @@ export function makeRiggedSoldier(camo, { rifle = true, mask = true, civilian = 
     if (b) rest[k] = { q: b.quaternion.clone(), p: b.position.clone() };
   }
 
-  outer.userData.rig = { ...rig, rest, mixer, actions, play, playOverlay, state: rigState, alignWeapon, swapWeapon };
+  outer.userData.rig = { ...rig, rest, mixer, actions, play, playOverlay, stopOverlay, state: rigState, alignWeapon, swapWeapon };
   outer.userData.tick = (dt) => { mixer?.update(dt); };
   outer.userData.parts = {
     legL: rig.legL, legR: rig.legR, armL: rig.armL, armR: rig.armR,
@@ -636,10 +683,30 @@ export function makeRiggedSoldier(camo, { rifle = true, mask = true, civilian = 
 const qSwing = new THREE.Quaternion();
 const X_AXIS = new THREE.Vector3(1, 0, 0);
 
+// Per-frame carry-style sync: while a soldier's current weapon is the
+// ballistic knife, the upper body holds the knife-idle stance as a looping
+// overlay (one-handed carry) instead of the shouldered rifle pose, while
+// the base clip keeps driving the legs. Returns true when the knife stance
+// is (or is being) applied, so callers can substitute knife gestures.
+export function riggedStance(soldier) {
+  const r = soldier.userData.rig;
+  if (!r?.playOverlay) return false;
+  const knife = soldier.userData.currentWeapon === 'knife' && r.actions['knife-idle-upper'];
+  if (knife) {
+    if (r.state.overlayLoop !== 'knife-idle-upper' && !r.state.busy) {
+      r.playOverlay('knife-idle-upper', { loop: true, fade: 0.2 });
+    }
+    return true;
+  }
+  if (r.state.overlayLoop === 'knife-idle-upper') r.stopOverlay(0.2);
+  return false;
+}
+
 export function riggedWalk(soldier, t, speed = 1) {
   const r = soldier.userData.rig;
   if (!r) return;
   if (r.actions?.walk) {
+    riggedStance(soldier);
     if (soldier.userData.civilian && r.actions['unarmed-run']) {
       r.play('unarmed-run', { fade: 0.2, timeScale: Math.max(0.7, Math.min(1.4, 0.55 + speed * 0.35)) });
     } else if (soldier.userData.crouched && r.actions['crouch-walk']) {
@@ -667,6 +734,7 @@ export function riggedIdle(soldier) {
   const r = soldier.userData.rig;
   soldier.rotation.x = 0;
   if (!r?.play) return;
+  riggedStance(soldier);
   if (soldier.userData.civilian && r.actions['scared-idle']) r.play('scared-idle', { fade: 0.25 });
   else if (soldier.userData.crouched && r.actions['crouch-idle']) r.play('crouch-idle', { fade: 0.25 });
   else r.play('idle', { fade: 0.25 });
@@ -730,6 +798,7 @@ export function riggedHit(soldier) {
 export function riggedAim(soldier) {
   const r = soldier.userData.rig;
   if (!r) return;
+  riggedStance(soldier);
   if (r.actions?.aim) r.play('aim', { fade: 0.2 });
   else riggedIdle(soldier);
 }
@@ -737,6 +806,15 @@ export function riggedAim(soldier) {
 export function riggedFire(soldier) {
   const r = soldier.userData.rig;
   if (!r) return;
+  if (riggedStance(soldier)) {
+    // knife carry: the shot is a throw gesture, not a trigger pull. Fired
+    // over the stance loop, which the overlay channel returns to after.
+    if (r.state.overlay === 'knife-idle-upper' && r.actions['knife-throw-upper']) {
+      r.playOverlay('knife-throw-upper', { fade: 0.08 });
+    }
+    r.play('aim', { fade: 0.08 }); // legs hold the combat stance
+    return;
+  }
   if (r.actions?.fire) r.play('fire', { fade: 0.08 });
   else riggedAim(soldier);
 }

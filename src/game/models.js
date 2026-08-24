@@ -2,7 +2,11 @@
 // Everything is built from primitives so the game ships with zero assets.
 
 import * as THREE from 'three';
-import { riggedReady, makeRiggedSoldier, riggedWalk, riggedIdle, riggedDeath, riggedHit, riggedAim, riggedFire, riggedStun, riggedReload, riggedSit, makeWeaponMesh } from './rigged.js';
+import { riggedReady, makeRiggedSoldier, riggedWalk, riggedIdle, riggedDeath, riggedHit, riggedAim, riggedFire, riggedStun, riggedReload, riggedSit, riggedStance, makeWeaponMesh } from './rigged.js';
+
+// carry-style sync (knife stance vs shouldered rifle) — used by the
+// first-person viewmodel driver in game.js; bots get it via the pose facades
+export { riggedStance as syncWeaponStance };
 import { makeVegetation, scorch } from './props.js';
 
 const mat = (color, opts = {}) => new THREE.MeshLambertMaterial({ color, ...opts });
@@ -250,11 +254,16 @@ export function makeRiggedViewmodel(camo, weapon, headgear = null) {
   // face the camera's forward (-Z); models face +Z
   body.rotation.y = Math.PI;
   body.scale.setScalar(VM_BODY_SCALE);
-  // camera just above and behind the eyes, looking over the weapon
-  body.position.set(0, -(VM_EYE * VM_BODY_SCALE) - VM_DROP, -VM_FWD);
+  // camera just above and behind the eyes, looking over the weapon. The
+  // knife carry raises the arm toward the face, so that body sits a touch
+  // lower to keep the forearm out of the camera
+  const drop = VM_DROP + (weapon === 'knife' ? 0.09 : 0);
+  body.position.set(0, -(VM_EYE * VM_BODY_SCALE) - drop, -VM_FWD);
   wrap.add(body);
   wrap.userData.rig = body.userData.rig;
   wrap.userData.tick = body.userData.tick;
+  // each viewmodel carries exactly one weapon — the stance sync reads this
+  wrap.userData.currentWeapon = weapon;
   return wrap;
 }
 

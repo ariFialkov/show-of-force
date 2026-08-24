@@ -14,7 +14,7 @@ import { RISK_FACTORS } from '../config.js';
 import { buildWorld } from './world.js';
 import { Effects, sound } from './effects.js';
 import { EnemyBot, Comrade } from './bots.js';
-import { makeVehicle, makeCar, makeCivilian, makeObjectiveProp, makeGate, makeBackupViewmodel, makeWeaponViewmodel, makeRiggedViewmodel, animateWalk, poseIdle, poseSit } from './models.js';
+import { makeVehicle, makeCar, makeCivilian, makeObjectiveProp, makeGate, makeBackupViewmodel, makeWeaponViewmodel, makeRiggedViewmodel, animateWalk, poseIdle, poseFire, poseSit, syncWeaponStance } from './models.js';
 
 // Squad backup weapons (hold FIRE on mobile / N on desktop to switch)
 const BACKUPS = {
@@ -316,12 +316,18 @@ export class Game {
     if (!rig?.play) return;
     vm.userData.tick?.(dt);
     this.vmFireT = Math.max(0, (this.vmFireT ?? 0) - dt);
-    if (this.player.reload > 0) rig.play('reload', { fade: 0.12 });
+    // the ballistic-knife viewmodel carries one-handed (upper-body stance
+    // overlay) and throws instead of pulling a trigger
+    const knife = syncWeaponStance(vm);
+    if (this.player.reload > 0 && !knife) rig.play('reload', { fade: 0.12 });
+    else if (this.vmFireT > 0 && knife) poseFire(vm);
     else if (this.vmFireT > 0) rig.play('fire', { fade: 0.05 });
     else rig.play('aim', { fade: 0.16 });
     // the weapon was fitted in the bind pose; once the carry stance has
-    // settled, re-align the barrel to the crosshair from the live pose
-    if (!vm.userData.aligned) {
+    // settled, re-align the barrel to the crosshair from the live pose.
+    // The knife carry is a raised one-handed grip — re-aligning the blade
+    // to the crosshair there would twist it out of the hand.
+    if (!vm.userData.aligned && !knife) {
       vm.userData.alignT = (vm.userData.alignT ?? 0) + dt;
       if (vm.userData.alignT > 0.45) {
         vm.userData.aligned = true;
