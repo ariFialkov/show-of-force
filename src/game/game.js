@@ -181,6 +181,10 @@ export class Game {
       this.scene.remove(this.preludePlane);
       this.preludePlane = null;
     }
+    if (this.preludeWater) {
+      this.scene.remove(this.preludeWater);
+      this.preludeWater = null;
+    }
     this.prelude = null;
     if (this.viewmodel) { this.camera.remove(this.viewmodel); }
     this.effects.clear();
@@ -431,7 +435,12 @@ export class Game {
     this.vehicle = makeVehicle(type);
     this.scene.add(this.vehicle);
     const boat = type === 'boat';
-    const stop = start.clone().addScaledVector(fwd, -5.4);
+    // hull footprint (vehicle is still at the origin, unrotated) — dismount
+    // spots hang off the real sides/nose instead of assuming a small truck
+    const hullBB = new THREE.Box3().setFromObject(this.vehicle);
+    const halfW = Math.max(1.0, Math.min(-hullBB.min.x, hullBB.max.x));
+    const halfL = Math.max(2.0, hullBB.max.z);
+    const stop = start.clone().addScaledVector(fwd, -(halfL + 2.6));
     this.prelude = {
       kind: 'fpvDrive', t: 0, type, yaw, fwd, lat, start, gatePos, boat,
       p0: stop.clone().addScaledVector(fwd, -(dWall + (boat ? 62 : 46))).addScaledVector(lat, boat ? 9 : 18),
@@ -440,16 +449,42 @@ export class Game {
       rideDur: boat ? 6.4 : 5.8,
       stagger: [0.25, 0.95, 1.65],
       hopDur: 1.0,
-      playerOut: 2.55, playerOutDur: 1.05, advanceDur: 1.7,
+      playerOut: 2.55, playerOutDur: 1.05,
+      advanceDur: 1.7 + halfL * 0.16, jogDur: 1.35 + halfL * 0.12,
       seats: (this.vehicle.userData.seats ?? [
         new THREE.Vector3(-0.5, 1.0, -0.6),
         new THREE.Vector3(0.5, 1.0, -0.6),
         new THREE.Vector3(0, 1.0, -1.4)
       ]).map((v) => v.clone()),
       pSeat: (this.vehicle.userData.playerSeat ?? new THREE.Vector3(0.55, 1.0, 0.3)).clone(),
+      faceForward: !!this.vehicle.userData.faceForward,
       gateHit: false, dismStarted: [false, false, false], vmOut: false,
-      lookSmooth: null, vehYaw: yaw
+      lookSmooth: null, vehYaw: yaw, halfW, halfL
     };
+    if (boat) {
+      // the terrain skirt extends well past the wall, so lay a water lane
+      // under the run-in; the boat rides at hull-in-water depth until the
+      // beach-grind beat (u≈0.8), right at this strip's shoreward edge
+      const pr = this.prelude;
+      const shore = new THREE.Vector3(
+        0.04 * pr.p0.x + 0.32 * pr.p1.x + 0.64 * pr.p2.x, 0,
+        0.04 * pr.p0.z + 0.32 * pr.p1.z + 0.64 * pr.p2.z
+      );
+      const seaward = pr.p0.clone().setY(0);
+      const dir = seaward.clone().sub(shore).normalize();
+      const len = seaward.distanceTo(shore) + 60;
+      const night = !!this.mission.location.env?.night;
+      const geo = new THREE.PlaneGeometry(52, len);
+      geo.rotateX(-Math.PI / 2);
+      const water = new THREE.Mesh(
+        geo,
+        new THREE.MeshLambertMaterial({ color: night ? 0x1d2b36 : 0x33566b, transparent: true, opacity: 0.94 })
+      );
+      water.position.copy(shore).addScaledVector(dir, len / 2 - 6).setY(0.02);
+      water.rotation.y = Math.atan2(dir.x, dir.z);
+      this.preludeWater = water;
+      this.scene.add(water);
+    }
   }
 
   // FPV static-line jump: ride the cabin, tail door swings open, the stick
@@ -597,7 +632,8 @@ export class Game {
       this.vehicle.updateMatrixWorld();
       for (let i = 0; i < this.comrades.length; i++) {
         const world = this.vehicle.localToWorld(pr.seats[i].clone());
-        this.comrades[i].setPosition(world, pr.vehYaw + (pr.seats[i].z > 0 ? Math.PI : 0));
+        const flip = !pr.faceForward && pr.seats[i].z > 0 ? Math.PI : 0;
+        this.comrades[i].setPosition(world, pr.vehYaw + flip);
         poseSit(this.comrades[i].group, t * 3 + i * 1.7);
       }
       seatCam();
@@ -618,16 +654,28 @@ export class Game {
     this.vehicle.rotation.set(0, pr.vehYaw ?? pr.yaw, 0);
     this.vehicle.updateMatrixWorld();
 
+    // ground points hang off the hull's real footprint: hop off your own
+    // side of the vehicle, then jog a curve around the nose to the column
+    const sideSpot = (x, z) => {
+      const p = this.vehicle.localToWorld(new THREE.Vector3(x, 0, z));
+      p.y = 0;
+      return p;
+    };
+    const qbez = (a, b, c2, u) => new THREE.Vector3(
+      (1 - u) * (1 - u) * a.x + 2 * u * (1 - u) * b.x + u * u * c2.x, 0,
+      (1 - u) * (1 - u) * a.z + 2 * u * (1 - u) * b.z + u * u * c2.z
+    );
+
     // comrades hop down in sequence, then jog to their column slots
     for (let i = 0; i < this.comrades.length; i++) {
       const c = this.comrades[i];
       const tau = td - pr.stagger[i];
       const seatWorld = this.vehicle.localToWorld(pr.seats[i].clone());
-      const spot = pr.p2.clone()
-        .addScaledVector(pr.fwd, 2.4)
-        .addScaledVector(pr.lat, (i - 1) * 1.8);
+      const side = pr.seats[i].x >= 0 ? 1 : -1;
+      const spot = sideSpot(side * (pr.halfW + 1.0), pr.seats[i].z + 0.6);
       if (tau < 0) {
-        c.setPosition(seatWorld, (pr.vehYaw ?? pr.yaw) + (pr.seats[i].z > 0 ? Math.PI : 0));
+        const flip = !pr.faceForward && pr.seats[i].z > 0 ? Math.PI : 0;
+        c.setPosition(seatWorld, (pr.vehYaw ?? pr.yaw) + flip);
         poseSit(c.group, t * 3 + i * 1.7);
       } else if (tau < pr.hopDur) {
         if (!pr.dismStarted[i]) {
@@ -642,10 +690,12 @@ export class Game {
         c.setPosition(p, faceYaw);
       } else {
         const slot = this.comradeSlotPos(i, pr.start, pr.fwd);
-        const k2 = clamp01((tau - pr.hopDur) / 1.35);
-        const p = new THREE.Vector3().lerpVectors(spot, slot, ease(k2));
+        const corner = sideSpot(side * (pr.halfW + 1.2), pr.halfL + 1.6);
+        const k2 = clamp01((tau - pr.hopDur) / pr.jogDur);
+        const p = qbez(spot, corner, slot, ease(k2));
+        const pAhead = qbez(spot, corner, slot, ease(Math.min(1, k2 + 0.06)));
         const faceYaw = k2 < 0.97
-          ? Math.atan2(slot.x - spot.x, slot.z - spot.z)
+          ? Math.atan2(pAhead.x - p.x, pAhead.z - p.z)
           : this.controls.yaw + Math.PI;
         c.setPosition(p.setY(0), faceYaw);
         if (k2 < 0.97) animateWalk(c.group, t * 6, 1.1);
@@ -655,17 +705,12 @@ export class Game {
 
     // player: stay seated watching the squad go, then hop down and walk on
     const tp = td - pr.playerOut;
-    const ground = pr.p2.clone()
-      .addScaledVector(pr.fwd, 1.9)
-      .addScaledVector(pr.lat, pr.pSeat.x > 0 ? 1.5 : -1.5);
+    const pSide = pr.pSeat.x >= 0 ? 1 : -1;
+    const ground = sideSpot(pSide * (pr.halfW + 1.1), pr.pSeat.z + 0.5);
     if (tp < 0) {
       seatCam();
-      // glance toward the comrades pouring out ahead, offset to the
-      // player's side so the hull doesn't block the view
-      const mid = pr.p2.clone()
-        .addScaledVector(pr.fwd, 3.4)
-        .addScaledVector(pr.lat, Math.sign(pr.pSeat.x) * 1.4)
-        .setY(1.0);
+      // glance toward the comrades hopping down on the player's flank
+      const mid = sideSpot(pSide * (pr.halfW + 1.7), pr.pSeat.z + 2.6).setY(1.0);
       smoothLook(mid);
       vmRig?.play?.('sit', { fade: 0.3 });
     } else if (tp < pr.playerOutDur) {
@@ -690,7 +735,8 @@ export class Game {
       const ta = tp - pr.playerOutDur;
       const k = ease(ta / pr.advanceDur);
       vmRig?.play?.('aim', { fade: 0.25 });
-      const p = new THREE.Vector3().lerpVectors(ground.clone().setY(EYE), pr.start.clone().setY(EYE), k);
+      const pCorner = sideSpot(pSide * (pr.halfW + 1.5), pr.halfL + 2.0);
+      const p = qbez(ground, pCorner, pr.start, k);
       p.y = EYE + Math.abs(Math.sin(ta * 7.5)) * 0.045 * (1 - k * 0.5);
       this.camera.position.copy(p);
       smoothLook(pr.start.clone().addScaledVector(pr.fwd, 40).setY(EYE), false);

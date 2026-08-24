@@ -807,12 +807,17 @@ const VEHICLE_SEATS = {
     player: [0.72, 0.55, 0.4]
   },
   truck: {
-    seats: [[-0.55, 1.0, -0.85], [0.55, 1.0, -0.85], [-0.55, 1.0, 0.05]],
-    player: [0.55, 1.0, 0.05]
+    // player rides shotgun so the view is over the hood, not a backrest;
+    // bench height matches the tub, and nobody in a jeep faces aft
+    seats: [[-0.55, 0.62, 0.05], [-0.55, 0.62, -0.85], [0.55, 0.62, -0.85]],
+    player: [0.55, 1.3, 0.05], // eye rides above the windshield header
+
+    forward: true
   },
   apc: {
-    seats: [[-0.6, 1.1, -1.25], [0.6, 1.1, -1.25], [-0.6, 1.1, -2.0]], // pickup bed
-    player: [0.6, 1.1, -0.5]
+    seats: [[-0.6, 0.7, -1.25], [0.6, 0.7, -1.25], [-0.6, 0.7, -2.0]], // pickup bed
+    player: [0.6, 1.1, -0.5],
+    forward: true
   }
 };
 
@@ -830,6 +835,7 @@ export function makeVehicle(type) {
       if (layout) {
         v.userData.seats = layout.seats.map((s) => new THREE.Vector3(...s));
         v.userData.playerSeat = new THREE.Vector3(...layout.player);
+        v.userData.faceForward = !!layout.forward;
       }
       return enableShadows(v);
     }

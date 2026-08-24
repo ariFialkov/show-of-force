@@ -615,7 +615,12 @@ function applyVehicleTransformLike(v, params, scale) {
   // Green Beret jeep — olive drab, glass dark; enemy twin in rust-maroon
   {
     const obj = loadFbx('assets-src/props/jeep.fbx');
-    const meshes = meshesOf(obj);
+    // drop the glass panes — baked opaque they blind the FPV ride from the
+    // passenger seat; an open windshield frame reads better anyway
+    const meshes = meshesOf(obj).filter((m) => {
+      const mats = Array.isArray(m.material) ? m.material : [m.material];
+      return !mats.every((mm) => (mm?.name ?? '').toLowerCase().includes('glass'));
+    });
     const jeepColor = (body) => (m, mi) => {
       const mats = Array.isArray(m.material) ? m.material : [m.material];
       const n = (mats[mi]?.name ?? '').toLowerCase();
