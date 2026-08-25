@@ -14,9 +14,57 @@ export function generateMap(rng, opts = {}) {
 
   for (let attempt = 0; attempt < 48; attempt++) {
     const map = tryGenerate(rng, segments, cellSize);
-    if (map) return map;
+    if (map) {
+      map.approach = computeApproach(map);
+      return map;
+    }
   }
-  return straightFallback(segments, 5, cellSize);
+  const fb = straightFallback(segments, 5, cellSize);
+  fb.approach = computeApproach(fb);
+  return fb;
+}
+
+// Insertion approach: the cardinal direction the squad's vehicle drives in
+// FROM (pointing from the spawn cell out toward the perimeter). Chosen
+// per-map among the three directions that don't collide with the route's
+// first leg — prefer a lane (±1 cell wide) free of carved cells, then the
+// shortest run to the map edge, so the ride never crosses compound walls
+// and never has to cover half the map at highway speed. The perimeter
+// gate, the spawn cell's open wall edge, the building-free lane, and the
+// prelude drive path all key off this one value.
+function computeApproach(map) {
+  const a = map.path[0], b2 = map.path[1] ?? a;
+  const fdx = Math.sign(b2.x - a.x), fdz = Math.sign(b2.z - a.z);
+  const cands = [
+    { dx: -fdx, dz: -fdz },              // straight behind (wins ties)
+    { dx: -fdz, dz: fdx },
+    { dx: fdz, dz: -fdx }
+  ].filter((d) => d.dx !== 0 || d.dz !== 0);
+  if (!cands.length) cands.push({ dx: 0, dz: -1 });
+  const b = map.bounds;
+  let best = null;
+  for (const d of cands) {
+    let dist;
+    if (d.dz < 0) dist = a.z - b.minZ + 4;
+    else if (d.dz > 0) dist = b.maxZ - a.z + 4;
+    else if (d.dx < 0) dist = a.x - b.minX + 4;
+    else dist = b.maxX - a.x + 4;
+    let intrusions = 0;
+    for (const c of map.carved) {
+      const [x, z] = c.split(',').map(Number);
+      const rx = x - a.x, rz = z - a.z;
+      const along = rx * d.dx + rz * d.dz;
+      const lateral = Math.abs(rx * d.dz) + Math.abs(rz * d.dx);
+      if (along >= 1 && lateral <= 1) intrusions++;
+    }
+    const cand = { dx: d.dx, dz: d.dz, dist, intrusions };
+    if (!best
+      || cand.intrusions < best.intrusions
+      || (cand.intrusions === best.intrusions && cand.dist < best.dist)) {
+      best = cand;
+    }
+  }
+  return best;
 }
 
 function tryGenerate(rng, segments, cellSize) {

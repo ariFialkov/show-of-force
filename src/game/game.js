@@ -185,6 +185,10 @@ export class Game {
       this.scene.remove(this.preludeWater);
       this.preludeWater = null;
     }
+    if (this.preludeBarrier) {
+      for (const b of this.preludeBarrier.bodies) this.scene.remove(b.mesh);
+      this.preludeBarrier = null;
+    }
     this.prelude = null;
     if (this.viewmodel) { this.camera.remove(this.viewmodel); }
     this.effects.clear();
@@ -383,7 +387,8 @@ export class Game {
 
     this.weaponMode = 'primary';
     this.backupAmmo = BACKUPS[this.mission.team.backup].ammo;
-    // weapon stays slung during the insertion ride; raised at the breach
+    // hidden while the pre-mission menu is up; revealed the moment the
+    // insertion cinematic starts and stays in frame from then on
     g.visible = false;
     // classic FPS trick: the viewmodel ignores the depth buffer so the
     // barrel never clips into walls when hugging cover
@@ -414,16 +419,24 @@ export class Game {
     const fwd = new THREE.Vector3(-Math.sin(yaw), 0, -Math.cos(yaw));
     const lat = new THREE.Vector3(-fwd.z, 0, fwd.x);
     const start = new THREE.Vector3(this.player.pos.x, 0, this.player.pos.z);
+    // the arms and rifle stay in frame through the whole insertion — the
+    // rig just plays sit/dismount/fall poses instead of the combat stance
+    if (this.viewmodelPrimary) this.viewmodelPrimary.visible = true;
 
+    // drive in along the map's insertion approach: the direction mapgen
+    // picked as clear of compound rooms, with the perimeter gate and the
+    // spawn cell's open wall edge both aligned to it
+    const apc = this.map.approach ?? { dx: Math.round(-fwd.x), dz: Math.round(-fwd.z) };
+    const app = new THREE.Vector3(apc.dx, 0, apc.dz);
     let dWall = 42;
-    if (fwd.z > 0.5) dWall = start.z - (b.minZ - 4) * S;
-    else if (fwd.z < -0.5) dWall = (b.maxZ + 4) * S - start.z;
-    else if (fwd.x > 0.5) dWall = start.x - (b.minX - 4) * S;
-    else if (fwd.x < -0.5) dWall = (b.maxX + 4) * S - start.x;
-    const gatePos = start.clone().addScaledVector(fwd, -dWall);
+    if (apc.dz < 0) dWall = start.z - (b.minZ - 4) * S;
+    else if (apc.dz > 0) dWall = (b.maxZ + 4) * S - start.z;
+    else if (apc.dx < 0) dWall = start.x - (b.minX - 4) * S;
+    else if (apc.dx > 0) dWall = (b.maxX + 4) * S - start.x;
+    const gatePos = start.clone().addScaledVector(app, dWall);
 
     if (type === 'parachute') this.startJumpPrelude(yaw, fwd, lat, start);
-    else this.startDrivePrelude(type, yaw, fwd, lat, start, gatePos, dWall);
+    else this.startDrivePrelude(type, yaw, fwd, lat, start, gatePos, dWall, app);
     this.cb.onCinematicStart?.();
     sound.step();
   }
@@ -431,7 +444,7 @@ export class Game {
   // FPV ride-in: seated on the vehicle with the squad, drive through the
   // perimeter gate right up to the compound entrance, sequential dismount,
   // then a short walk onto the spawn point — one continuous camera.
-  startDrivePrelude(type, yaw, fwd, lat, start, gatePos, dWall) {
+  startDrivePrelude(type, yaw, fwd, lat, start, gatePos, dWall, app) {
     this.vehicle = makeVehicle(type);
     this.scene.add(this.vehicle);
     const boat = type === 'boat';
@@ -440,13 +453,24 @@ export class Game {
     const hullBB = new THREE.Box3().setFromObject(this.vehicle);
     const halfW = Math.max(1.0, Math.min(-hullBB.min.x, hullBB.max.x));
     const halfL = Math.max(2.0, hullBB.max.z);
-    const stop = start.clone().addScaledVector(fwd, -(halfL + 2.6));
+    const latA = new THREE.Vector3(-app.z, 0, app.x);
+    const stop = start.clone().addScaledVector(app, halfL + 2.6);
+    // ride geometry: any curve happens out beyond the perimeter; from well
+    // before the gate the run is dead straight down the cleared lane, so
+    // the hull threads the gate and the spawn wall's opening instead of
+    // ghosting through masonry. Far-off perimeters get the ride capped and
+    // start mid-margin rather than covering half the map at highway speed.
+    const gd = Math.max(6, dWall - (halfL + 2.6)); // gate distance from the stop
+    const outside = boat ? 62 : 46;
+    const gateOnRide = gd + outside <= 170;
+    const rideLen = gateOnRide ? gd + outside : 116; // capped ride starts well inside a far-off gate
+    const rideDur = boat ? 6.4 : THREE.MathUtils.clamp(rideLen / 15.5, 4.6, 8.0);
     this.prelude = {
       kind: 'fpvDrive', t: 0, type, yaw, fwd, lat, start, gatePos, boat,
-      p0: stop.clone().addScaledVector(fwd, -(dWall + (boat ? 62 : 46))).addScaledVector(lat, boat ? 9 : 18),
-      p1: stop.clone().addScaledVector(fwd, -dWall * 0.45).addScaledVector(lat, boat ? 1.5 : 3.5),
+      p0: stop.clone().addScaledVector(app, rideLen).addScaledVector(latA, boat ? 8 : 8),
+      p1: stop.clone().addScaledVector(app, rideLen * 0.34),
       p2: stop,
-      rideDur: boat ? 6.4 : 5.8,
+      rideDur, gateOnRide,
       stagger: [0.25, 0.95, 1.65],
       hopDur: 1.0,
       playerOut: 2.55, playerOutDur: 1.05,
@@ -459,8 +483,49 @@ export class Game {
       pSeat: (this.vehicle.userData.playerSeat ?? new THREE.Vector3(0.55, 1.0, 0.3)).clone(),
       faceForward: !!this.vehicle.userData.faceForward,
       gateHit: false, dismStarted: [false, false, false], vmOut: false,
-      lookSmooth: null, vehYaw: yaw, halfW, halfL
+      lookSmooth: null, vehYaw: yaw, halfW, halfL,
+      app: app.clone(), latA: latA.clone()
     };
+    if (gateOnRide && !boat) {
+      // a checkpoint barrier stands in the perimeter gate — the one thing
+      // the vehicle is ALLOWED to smash on the way in. The arm and its two
+      // supports become tumbling debris when the hull clips them, and the
+      // wreck is left lying by the gate.
+      const bodies = [];
+      const armMats = [
+        new THREE.MeshLambertMaterial({ color: 0xb03a2e }),
+        new THREE.MeshLambertMaterial({ color: 0xd8d2c4 })
+      ];
+      const arm = new THREE.Group();
+      const segL = 1.05, segN = 7;
+      for (let i = 0; i < segN; i++) {
+        const m = new THREE.Mesh(new THREE.BoxGeometry(segL, 0.16, 0.16), armMats[i % 2]);
+        m.position.x = (i - (segN - 1) / 2) * segL;
+        arm.add(m);
+      }
+      arm.position.copy(gatePos).setY(1.02);
+      const supMat = new THREE.MeshLambertMaterial({ color: 0x3c4046 });
+      const sups = [-1, 1].map((s) => {
+        const sup = new THREE.Group();
+        const post = new THREE.Mesh(new THREE.BoxGeometry(0.24, 1.14, 0.24), supMat);
+        post.position.y = 0.57;
+        const foot = new THREE.Mesh(new THREE.BoxGeometry(0.7, 0.12, 0.7), supMat);
+        foot.position.y = 0.06;
+        sup.add(post, foot);
+        sup.position.copy(gatePos).addScaledVector(latA, s * (segL * segN) / 2);
+        return sup;
+      });
+      const yawB = Math.atan2(app.x, app.z);
+      for (const mesh of [arm, ...sups]) {
+        mesh.rotation.y = yawB;
+        this.scene.add(mesh);
+        bodies.push({
+          mesh, live: false, rest: 0.14,
+          vel: new THREE.Vector3(), angVel: new THREE.Vector3()
+        });
+      }
+      this.preludeBarrier = { hit: false, bodies };
+    }
     if (boat) {
       // the terrain skirt extends well past the wall, so lay a water lane
       // under the run-in; the boat rides at hull-in-water depth until the
@@ -594,6 +659,26 @@ export class Game {
       this.camera.position.copy(p);
     };
 
+    // knocked barrier debris tumbles, bounces once or twice, settles
+    if (this.preludeBarrier?.hit) {
+      for (const b of this.preludeBarrier.bodies) {
+        if (!b.live) continue;
+        b.vel.y -= 13 * dt;
+        b.mesh.position.addScaledVector(b.vel, dt);
+        b.mesh.rotation.x += b.angVel.x * dt;
+        b.mesh.rotation.y += b.angVel.y * dt;
+        b.mesh.rotation.z += b.angVel.z * dt;
+        if (b.mesh.position.y < b.rest && b.vel.y < 0) {
+          b.mesh.position.y = b.rest;
+          if (Math.abs(b.vel.y) < 1.6) { b.live = false; continue; }
+          b.vel.y = -b.vel.y * 0.32;
+          b.vel.x *= 0.55;
+          b.vel.z *= 0.55;
+          b.angVel.multiplyScalar(0.45);
+        }
+      }
+    }
+
     if (t < pr.rideDur) {
       // ---- RIDE: seated FPV, vehicle curving in through the outer gate
       const u = ease(t / pr.rideDur);
@@ -619,7 +704,8 @@ export class Game {
       } else {
         this.vehicle.position.y = Math.abs(Math.sin(t * 6.5)) * 0.05 * (1 - u);
       }
-      // punching through the outer gate: dust and a jolt
+      // smashing the checkpoint barrier in the gate: dust, a jolt, and the
+      // barrier's pieces tumbling away ahead of the hood
       if (!pr.gateHit && pos.distanceTo(pr.gatePos) < 4.5) {
         pr.gateHit = true;
         this.shake = 0.32;
@@ -627,6 +713,22 @@ export class Game {
         for (const side of [-1, 1]) {
           const p = this.vehicle.localToWorld(new THREE.Vector3(side * 1.6, 0.6, 1.8));
           this.effects.impact(p);
+        }
+        if (this.preludeBarrier && !this.preludeBarrier.hit) {
+          this.preludeBarrier.hit = true;
+          const push = pr.app.clone().negate(); // vehicle's direction of travel
+          for (const b of this.preludeBarrier.bodies) {
+            b.live = true;
+            b.vel.copy(push).multiplyScalar(6.5 + Math.random() * 3.5)
+              .addScaledVector(pr.latA, (Math.random() - 0.5) * 5)
+              .setY(2.4 + Math.random() * 1.6);
+            b.angVel.set(
+              (Math.random() - 0.5) * 9,
+              (Math.random() - 0.5) * 6,
+              (Math.random() - 0.5) * 9
+            );
+          }
+          sound.burst({ dur: 0.12, freq: 900, gain: 0.22 }); // wood crack
         }
       }
       this.vehicle.updateMatrixWorld();

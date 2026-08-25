@@ -727,18 +727,32 @@ function collectWallEdges(map, pillarSet = new Set()) {
   const S = map.cellSize;
   const edges = [];
   const solid = (x, z) => !map.isCarved(x, z) && !pillarSet.has(`${x},${z}`);
-  // The spawn cell's rear edge (facing the insertion approach) is left
-  // open: the squad now rides IN through it during the no-cut insertion
-  // cinematic, and the vehicle parks in the opening afterwards. Collision
-  // still blocks the player (uncarved cells outside), so it never becomes
-  // an exploitable exit.
+  // The spawn cell's edge facing the insertion approach is left open: the
+  // squad rides IN through it during the no-cut insertion cinematic, and
+  // the vehicle parks in the opening afterwards. Collision still blocks
+  // the player (uncarved cells outside), so it never becomes an
+  // exploitable exit. In the rare map where the chosen approach lane still
+  // crosses carved cells, the wall edges sitting exactly on the lane axis
+  // are opened too, so the drive threads gaps rather than ghosting
+  // through masonry.
   const a = map.path[0], b2 = map.path[1] ?? a;
-  const adx = Math.sign(b2.x - a.x), adz = Math.sign(b2.z - a.z);
-  const entryKey = `${a.x},${a.z}:${-adx},${-adz}`;
+  const ap = map.approach ?? {
+    dx: -Math.sign(b2.x - a.x), dz: -Math.sign(b2.z - a.z)
+  };
+  const onAxis = (x, z) => {
+    const rx = x - a.x, rz = z - a.z;
+    const k = rx * ap.dx + rz * ap.dz;
+    return k >= 0 && rx === ap.dx * k && rz === ap.dz * k ? k : -1;
+  };
   // nx/nz point from the wall back into the carved cell it faces
   for (const c of map.carved) {
     const [x, z] = c.split(',').map(Number);
-    const skipDir = (dx, dz) => `${x},${z}:${dx},${dz}` === entryKey;
+    const axisK = onAxis(x, z);
+    const skipDir = (dx, dz) => {
+      if (axisK < 0) return false;
+      if (dx === ap.dx && dz === ap.dz) return true;          // approach-facing edge
+      return axisK >= 1 && dx === -ap.dx && dz === -ap.dz;    // exit edge of lane cells
+    };
     if (solid(x, z + 1) && !skipDir(0, 1)) edges.push({ x: x * S, z: z * S + S / 2, rotY: 0, nx: 0, nz: -1 });
     if (solid(x, z - 1) && !skipDir(0, -1)) edges.push({ x: x * S, z: z * S - S / 2, rotY: 0, nx: 0, nz: 1 });
     if (solid(x + 1, z) && !skipDir(1, 0)) edges.push({ x: x * S + S / 2, z: z * S, rotY: Math.PI / 2, nx: -1, nz: 0 });
@@ -757,9 +771,12 @@ function buildPerimeter(group, map, env) {
   const h = 4.8, t = 1.4;
   const mat = lambert(env.wallAlt);
 
-  // approach direction = behind the first path step
+  // gate goes on the side the insertion vehicle drives in from
   const a = map.path[0], b2 = map.path[1] ?? a;
-  const dir = { x: Math.sign(b2.x - a.x), z: Math.sign(b2.z - a.z) };
+  const ap = map.approach ?? {
+    dx: -Math.sign(b2.x - a.x), dz: -Math.sign(b2.z - a.z)
+  };
+  const dir = { x: -ap.dx, z: -ap.dz };
   const gate = { x: a.x * S, z: a.z * S };
   const gap = S * 1.6;
 
@@ -849,10 +866,12 @@ function buildWatchtowers(group, map, env, rng) {
 // keep that lane clear of buildings and towers so the ride never clips.
 function inApproachLane(map, x, z) {
   const a = map.path[0], b2 = map.path[1] ?? a;
-  const dx = Math.sign(b2.x - a.x), dz = Math.sign(b2.z - a.z);
+  const ap = map.approach ?? {
+    dx: -Math.sign(b2.x - a.x), dz: -Math.sign(b2.z - a.z)
+  };
   const rx = x - a.x, rz = z - a.z;
-  const behind = rx * -dx + rz * -dz;
-  const lateral = Math.abs(rx * dz) + Math.abs(rz * dx);
+  const behind = rx * ap.dx + rz * ap.dz;
+  const lateral = Math.abs(rx * ap.dz) + Math.abs(rz * ap.dx);
   return behind >= -1 && lateral <= 2;
 }
 
