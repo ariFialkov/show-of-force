@@ -14,7 +14,7 @@ import { RISK_FACTORS } from '../config.js';
 import { buildWorld } from './world.js';
 import { Effects, sound } from './effects.js';
 import { EnemyBot, Comrade } from './bots.js';
-import { makeVehicle, makeCar, makeCivilian, makeObjectiveProp, makeGate, makeBackupViewmodel, makeWeaponViewmodel, makeRiggedViewmodel, makeThrownWeapon, makeJumpPlane, PLANE_CABIN, animateWalk, poseIdle, poseFire, poseSit, syncWeaponStance } from './models.js';
+import { makeVehicle, makeCar, makeCivilian, makeObjectiveProp, makeGate, makeBackupViewmodel, makeWeaponViewmodel, makeRiggedViewmodel, makeThrownWeapon, makeJumpPlane, PLANE_CABIN, animateWalk, poseIdle, poseFire, poseSit, syncWeaponStance, anchorViewmodelEyes, resetViewmodelAnchor, setViewmodelBody } from './models.js';
 
 // Squad backup weapons (hold FIRE on mobile / N on desktop to switch)
 const BACKUPS = {
@@ -419,9 +419,14 @@ export class Game {
     const fwd = new THREE.Vector3(-Math.sin(yaw), 0, -Math.cos(yaw));
     const lat = new THREE.Vector3(-fwd.z, 0, fwd.x);
     const start = new THREE.Vector3(this.player.pos.x, 0, this.player.pos.z);
-    // the arms and rifle stay in frame through the whole insertion — the
-    // rig just plays sit/dismount/fall poses instead of the combat stance
-    if (this.viewmodelPrimary) this.viewmodelPrimary.visible = true;
+    // the arms and rifle stay in frame through the whole insertion, and the
+    // viewmodel shows the WHOLE body (minus the head the camera sits in)
+    // so the ride reads as your own lap, legs and torso rather than a pair
+    // of disembodied arms
+    if (this.viewmodelPrimary) {
+      this.viewmodelPrimary.visible = true;
+      setViewmodelBody(this.viewmodelPrimary, true);
+    }
 
     // drive in along the map's insertion approach: the direction mapgen
     // picked as clear of compound rooms, with the perimeter gate and the
@@ -576,7 +581,7 @@ export class Game {
       playerExitT: 5.8, walkDur: 1.0, stepOffT: 6.8,
       chuteAlt: 33, landDur: 0.45,
       exitStarted: [false, false, false], greenLit: false, vmOut: false,
-      landT: null, lookSmooth: null
+      landT: null, chuteT: null, lookSmooth: null
     };
   }
 
@@ -589,6 +594,13 @@ export class Game {
   finishPrelude() {
     const pr = this.prelude;
     if (this.viewmodelPrimary) this.viewmodelPrimary.visible = true;
+    // back to the combat viewmodel: arms only, camera-locked, at the static
+    // calibrated offset (both, so no cinematic state can leak into play)
+    for (const vm of [this.viewmodelPrimary, this.viewmodelBackup]) {
+      if (!vm) continue;
+      setViewmodelBody(vm, false);
+      resetViewmodelAnchor(vm);
+    }
     // authoritative reset: the choreography ends AT the spawn formation, so
     // these snaps are visually no-ops — they just guarantee game state
     this.camera.position.set(pr.start.x, EYE, pr.start.z);
@@ -625,11 +637,20 @@ export class Game {
     const pr = this.prelude;
     if (!pr) return;
     pr.t += dt;
-    // the squad and the first-person arms animate through the whole ride
+    // the squad and the first-person body animate through the whole ride
     for (const c of this.comrades) c.group.userData.tick?.(dt);
     this.viewmodel?.userData?.tick?.(dt);
+    pr.vmK = 0; // set by the branch during its handoff beat
     if (pr.kind === 'fpvJump') this.updateFpvJump(dt);
     else this.updateFpvDrive(dt);
+    // ...and the body re-hangs itself off the camera's eyepoint each frame,
+    // after the pose for this frame is set. Past the blend's midpoint the
+    // whole-body mask gives way to the combat arms, below the frame line.
+    anchorViewmodelEyes(this.viewmodel, pr.vmK);
+    if (pr.vmK > 0.55 && !pr.vmArmsBack) {
+      pr.vmArmsBack = true;
+      setViewmodelBody(this.viewmodel, false);
+    }
   }
 
   updateFpvDrive(dt) {
@@ -657,6 +678,14 @@ export class Game {
       const p = this.vehicle.localToWorld(eye);
       p.y += Math.sin(t * 9.2) * 0.012 + Math.sin(t * 13.7) * 0.006; // engine judder
       this.camera.position.copy(p);
+    };
+    // tilt a look target down by `rad` about the camera, so a settle-in
+    // glance is a real angle rather than a distance-dependent drop
+    const dipLook = (target, rad) => {
+      if (rad <= 0) return target;
+      const d = Math.hypot(target.x - this.camera.position.x, target.z - this.camera.position.z);
+      target.y -= d * Math.tan(rad);
+      return target;
     };
 
     // knocked barrier debris tumbles, bounces once or twice, settles
@@ -741,10 +770,13 @@ export class Game {
       seatCam();
       vmRig?.play?.('sit', { fade: 0.3 });
       // gaze runs along the player's own flank of the vehicle, so a
-      // centreline turret or cab never fills the frame
+      // centreline turret or cab never fills the frame. It starts dipped
+      // at your own kit — rifle across your knees, the squad opposite —
+      // and lifts to the approach as the vehicle runs in.
       const lookPt = this.vehicle.localToWorld(
         new THREE.Vector3(pr.pSeat.x * 1.1, pr.pSeat.y + 0.85, 16)
       );
+      dipLook(lookPt, 0.52 * (1 - ease(t / 2.4)));
       smoothLook(lookPt, t < dt * 2);
       return;
     }
@@ -836,6 +868,9 @@ export class Game {
     } else {
       const ta = tp - pr.playerOutDur;
       const k = ease(ta / pr.advanceDur);
+      // walking onto the spawn point: the weapon comes up to its combat
+      // carry as the body hands off to the gameplay viewmodel
+      pr.vmK = ease(ta / (pr.advanceDur * 0.8));
       vmRig?.play?.('aim', { fade: 0.25 });
       const pCorner = sideSpot(pSide * (pr.halfW + 1.5), pr.halfL + 2.0);
       const p = qbez(ground, pCorner, pr.start, k);
@@ -958,8 +993,15 @@ export class Game {
       eye.y += 0.62;
       this.camera.position.copy(plane.localToWorld(eye));
       vmRig?.play?.('sit', { fade: 0.3 });
-      // watching the door: down the cabin toward the opening ramp
-      smoothLook(plane.localToWorld(new THREE.Vector3(0, P.floor + 0.9, -11)), t < dt * 2);
+      // watching the door: down the cabin toward the opening ramp, after a
+      // first beat spent looking over your own rig in the red light
+      const aft = plane.localToWorld(new THREE.Vector3(0, P.floor + 0.9, -11));
+      const dip = 0.52 * (1 - ease(t / 2.0));
+      if (dip > 0) {
+        const d = Math.hypot(aft.x - this.camera.position.x, aft.z - this.camera.position.z);
+        aft.y -= d * Math.tan(dip);
+      }
+      smoothLook(aft, t < dt * 2);
       return;
     }
     if (t < pr.stepOffT) {
@@ -988,6 +1030,10 @@ export class Game {
       y,
       THREE.MathUtils.lerp(exitPos.z + pr.fwd.z * forwardCarry(tj), pr.start.z, ease(kAlt))
     );
+    // under canopy the rifle comes off the chest into its combat carry —
+    // the body hands off to the gameplay viewmodel before the boots land
+    if (drop.chuted && pr.chuteT === null) pr.chuteT = t;
+    if (pr.chuteT !== null) pr.vmK = ease((t - pr.chuteT - 0.5) / 1.5);
     // landing beat: a short knee-dip once boots touch
     if (drop.y <= EYE && pr.landT === null) pr.landT = t;
     if (pr.landT !== null) {
@@ -997,6 +1043,7 @@ export class Game {
       this.camera.position.copy(pos);
       smoothLook(pr.start.clone().addScaledVector(pr.fwd, 40).setY(EYE), false, 6);
       vmRig?.play?.('aim', { fade: 0.2 });
+      pr.vmK = 1;
       if (this.vehicle) this.vehicle.visible = false;
       if (kLand >= 1) this.finishPrelude();
       return;

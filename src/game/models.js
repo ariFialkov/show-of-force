@@ -2,7 +2,7 @@
 // Everything is built from primitives so the game ships with zero assets.
 
 import * as THREE from 'three';
-import { riggedReady, makeRiggedSoldier, riggedWalk, riggedIdle, riggedDeath, riggedHit, riggedAim, riggedFire, riggedStun, riggedReload, riggedSit, riggedStance, makeWeaponMesh } from './rigged.js';
+import { riggedReady, makeRiggedSoldier, riggedWalk, riggedIdle, riggedDeath, riggedHit, riggedAim, riggedFire, riggedStun, riggedReload, riggedSit, riggedStance, makeWeaponMesh, riggedPaletteGeometry } from './rigged.js';
 
 // carry-style sync (knife stance vs shouldered rifle) — used by the
 // first-person viewmodel driver in game.js; bots get it via the pose facades
@@ -266,7 +266,84 @@ export function makeRiggedViewmodel(camo, weapon, headgear = null) {
   wrap.userData.tick = body.userData.tick;
   // each viewmodel carries exactly one weapon — the stance sync reads this
   wrap.userData.currentWeapon = weapon;
+  wrap.userData.vmBody = body;
+  wrap.userData.vmBodyBase = body.position.clone();
+  // where the rig's head bone sits in wrapper space in the standing combat
+  // stance — i.e. where the camera's eyepoint is relative to this body.
+  // The cinematic re-solves the body's offset against this anchor every
+  // frame so whole-body clips (sit, dismount, fall) stay wrapped around
+  // the camera instead of drifting off it.
+  const head = body.userData.rig?.head;
+  if (head) {
+    body.updateWorldMatrix(true, true);
+    const p = new THREE.Vector3().setFromMatrixPosition(head.matrixWorld);
+    wrap.userData.vmEyeAnchor = wrap.worldToLocal(p);
+  }
   return wrap;
+}
+
+// Where the head bone sits relative to a TRUE first-person eyepoint: just
+// below the eyes and a little behind them. The combat viewmodel instead
+// parks the body a whole arm's length ahead (VM_FWD) so the hands read at
+// arm's length with no torso attached — fine for a floating pair of arms,
+// but with a whole body on screen that gap is exactly what makes it look
+// like someone else's body drifting in front of you.
+const VM_FPV_ANCHOR = new THREE.Vector3(0, -0.105 * VM_BODY_SCALE, 0.08 * VM_BODY_SCALE);
+
+// Pin the viewmodel body so its head bone holds a fixed offset from the
+// camera, whatever pose is playing. Without this the body hangs off its
+// root, and any clip that moves the hips relative to the head (sitting,
+// jumping down, falling) swings the torso and arms away from the camera.
+// `k` blends from the cinematic eyepoint (0) to the combat offset (1), so
+// the handoff to gameplay pushes the weapon out instead of snapping it.
+const VM_IDENT = new THREE.Quaternion();
+export function anchorViewmodelEyes(vm, k = 0) {
+  const body = vm?.userData?.vmBody;
+  const head = vm?.userData?.rig?.head;
+  const combat = vm?.userData?.vmEyeAnchor;
+  if (!body || !head || !combat) return;
+  const kk = THREE.MathUtils.clamp(k, 0, 1);
+  // A first-person BODY has to follow the camera's yaw but stay upright:
+  // parented rigidly, it pitches with the camera, so looking down tips your
+  // own torso away and you never see your lap — only arms hanging in space.
+  // The wrapper counter-rotates the camera's pitch/roll, then eases back to
+  // rigid camera-lock (k→1) for the combat viewmodel.
+  const cam = vm.parent;
+  if (cam) {
+    const camQ = cam.getWorldQuaternion(new THREE.Quaternion());
+    const e = new THREE.Euler().setFromQuaternion(camQ, 'YXZ');
+    const yawOnly = new THREE.Quaternion().setFromEuler(new THREE.Euler(0, e.y, 0, 'YXZ'));
+    vm.quaternion.copy(camQ.invert().multiply(yawOnly)).slerp(VM_IDENT, kk);
+  }
+  body.updateWorldMatrix(true, true);
+  const p = new THREE.Vector3().setFromMatrixPosition(head.matrixWorld);
+  vm.worldToLocal(p);
+  const target = VM_FPV_ANCHOR.clone().lerp(combat, kk);
+  body.position.add(target.sub(p));
+}
+
+// Restore the static combat offset (called at the handoff to gameplay,
+// where the aim stance is what the base offset was calibrated for).
+export function resetViewmodelAnchor(vm) {
+  const body = vm?.userData?.vmBody;
+  const base = vm?.userData?.vmBodyBase;
+  if (body && base) body.position.copy(base);
+  if (vm) vm.quaternion.identity();
+}
+
+// Swap the viewmodel between the combat arms-only mask and the cinematic
+// whole-body mask. Both masks are the same skinned template — only the
+// per-vertex alpha differs — so this is a geometry pointer swap on a live
+// rig, no rebuild and no reposing.
+export function setViewmodelBody(vm, whole) {
+  const body = vm?.userData?.vmBody;
+  if (!body) return;
+  body.traverse((o) => {
+    if (o.isSkinnedMesh && o.userData.palette) {
+      const { camo, mask, hideCrown } = o.userData.palette;
+      o.geometry = riggedPaletteGeometry(camo, mask, hideCrown, whole ? 'fpv' : true);
+    }
+  });
 }
 
 const VM_SCALE = { rifle: 0.72, shotgun: 0.62, harpoon: 0.58, flashgl: 0.85, rpg: 0.45, knife: 1.0 };

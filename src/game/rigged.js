@@ -153,13 +153,18 @@ function lift(c) {
   return c;
 }
 
-// Vertices whose dominant bone belongs to an arm — used to mask the body
-// down to just the limbs the first-person camera would actually see.
-let armMaskCache = null;
-function armMask() {
-  if (armMaskCache) return armMaskCache;
-  const isArm = template.boneDefs.map((b) =>
-    /Arm|ForeArm|Hand|Thumb|Index|Middle|Ring|Pinky/.test(b.name));
+// First-person body masks, keyed by each vertex's dominant bone:
+//   'arms' — just the limbs the combat camera would see over the weapon
+//   'fpv'  — the whole body minus head and neck, for the insertion
+//            cinematic where you should see your own lap, legs and torso
+//            (the camera sits inside the skull, so the head must go)
+const bodyMaskCache = new Map();
+function bodyMask(kind) {
+  if (bodyMaskCache.has(kind)) return bodyMaskCache.get(kind);
+  const keep = kind === 'arms'
+    ? (n) => /Arm|ForeArm|Hand|Thumb|Index|Middle|Ring|Pinky/.test(n)
+    : (n) => !/Head|Neck/.test(n);
+  const keepBone = template.boneDefs.map((b) => keep(b.name));
   const n = template.zones.length;
   const m = new Uint8Array(n);
   for (let v = 0; v < n; v++) {
@@ -167,14 +172,20 @@ function armMask() {
     for (let k = 1; k < 4; k++) {
       if (template.skinWeight[v * 4 + k] > template.skinWeight[v * 4 + maxK]) maxK = k;
     }
-    m[v] = isArm[template.skinIndex[v * 4 + maxK]] ? 1 : 0;
+    m[v] = keepBone[template.skinIndex[v * 4 + maxK]] ? 1 : 0;
   }
-  armMaskCache = m;
+  bodyMaskCache.set(kind, m);
   return m;
 }
 
+// exposed so the viewmodel can swap between its masks on a live rig
+export function riggedPaletteGeometry(camo, mask, hideHelmet, armsOnly) {
+  return riggedReady() ? getPaletteGeometry(camo, mask, hideHelmet, armsOnly) : null;
+}
+
 function getPaletteGeometry(camo, mask, hideHelmet = false, armsOnly = false) {
-  const key = paletteKey(camo, mask) + (hideHelmet ? ':hh' : '') + (armsOnly ? ':ao' : '');
+  const key = paletteKey(camo, mask) + (hideHelmet ? ':hh' : '')
+    + (armsOnly ? (armsOnly === 'fpv' ? ':fpv' : ':ao') : '');
   if (paletteGeomCache.has(key)) return paletteGeomCache.get(key);
 
   const dark = (hex, f) => new THREE.Color(hex).multiplyScalar(f);
@@ -196,7 +207,7 @@ function getPaletteGeometry(camo, mask, hideHelmet = false, armsOnly = false) {
   // RGBA: alpha 0 + material alphaTest discards geometry we don't want —
   // the modeled helmet under a full-head gear asset, or everything but the
   // arms for the first-person viewmodel
-  const arms = armsOnly ? armMask() : null;
+  const arms = armsOnly ? bodyMask(armsOnly === 'fpv' ? 'fpv' : 'arms') : null;
   const colors = new Uint8Array(n * 4);
   for (let i = 0; i < n; i++) {
     const zone = template.zones[i];
@@ -417,6 +428,9 @@ export function makeRiggedSoldier(camo, { rifle = true, mask = true, civilian = 
   mesh.castShadow = !IS_TOUCH && !armsOnly;
   mesh.frustumCulled = !armsOnly;
   if (armsOnly) mesh.renderOrder = 500;
+  // enough to re-derive the masked geometry later (the cinematic swaps the
+  // viewmodel between arms-only and whole-body without rebuilding the rig)
+  mesh.userData.palette = { camo, mask, hideCrown };
 
   const inner = new THREE.Group();
   inner.scale.setScalar(template.scale);
