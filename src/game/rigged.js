@@ -178,6 +178,38 @@ function bodyMask(kind) {
   return m;
 }
 
+// A full-head gear asset (the cartel ski mask) IS the head: everything
+// skinned to the head bone is hidden so nothing pokes through it —
+// helmet shell, modelled face, and the goggles + antenna that used to
+// sit on top of the mask. The eyes are the exception, a band of face
+// kept so the mask's eye opening has a face behind it instead of a hole.
+// The band is in model units relative to the head bone (face spans
+// roughly headY-0.5 .. +1.1; the eyes sit in its forward upper half).
+// [yLo, yHi, zMin]: the band's height, plus a forward cutoff so only the
+// front of the face survives — the temples and ears stay under the mask
+const EYE_BAND = [0.42, 1.02, 0.75];
+let replaceHeadCache = null;
+function replaceHeadMask() {
+  if (replaceHeadCache) return replaceHeadCache;
+  const isHead = template.boneDefs.map((b) => /Head/.test(b.name));
+  const n = template.zones.length;
+  const m = new Uint8Array(n); // 1 = hide under a full-head asset
+  const lo = template.headY + EYE_BAND[0], hi = template.headY + EYE_BAND[1];
+  for (let v = 0; v < n; v++) {
+    let maxK = 0;
+    for (let k = 1; k < 4; k++) {
+      if (template.skinWeight[v * 4 + k] > template.skinWeight[v * 4 + maxK]) maxK = k;
+    }
+    if (!isHead[template.skinIndex[v * 4 + maxK]]) continue;
+    const y = template.position[v * 3 + 1];
+    const z = template.position[v * 3 + 2];
+    const isEyes = template.zones[v] === 4 && y >= lo && y <= hi && z >= EYE_BAND[2];
+    m[v] = isEyes ? 0 : 1;
+  }
+  replaceHeadCache = m;
+  return m;
+}
+
 // exposed so the viewmodel can swap between its masks on a live rig
 export function riggedPaletteGeometry(camo, mask, hideHelmet, armsOnly) {
   return riggedReady() ? getPaletteGeometry(camo, mask, hideHelmet, armsOnly) : null;
@@ -208,6 +240,7 @@ function getPaletteGeometry(camo, mask, hideHelmet = false, armsOnly = false) {
   // the modeled helmet under a full-head gear asset, or everything but the
   // arms for the first-person viewmodel
   const arms = armsOnly ? bodyMask(armsOnly === 'fpv' ? 'fpv' : 'arms') : null;
+  const headGone = hideHelmet ? replaceHeadMask() : null;
   const colors = new Uint8Array(n * 4);
   for (let i = 0; i < n; i++) {
     const zone = template.zones[i];
@@ -217,7 +250,7 @@ function getPaletteGeometry(camo, mask, hideHelmet = false, armsOnly = false) {
     colors[i * 4] = Math.min(255, c.r * 255 * g);
     colors[i * 4 + 1] = Math.min(255, c.g * 255 * g);
     colors[i * 4 + 2] = Math.min(255, c.b * 255 * g);
-    const hidden = (hideHelmet && zone === 3) || (arms && !arms[i]);
+    const hidden = (hideHelmet && headGone[i]) || (arms && !arms[i]);
     colors[i * 4 + 3] = hidden ? 0 : 255;
   }
 
@@ -311,6 +344,19 @@ export function makeWeaponMesh(name, camo) {
     geom.setAttribute('position', new THREE.BufferAttribute(pos, 3));
     geom.setAttribute('normal', new THREE.BufferAttribute(nrm, 3, true));
     geom.setAttribute('color', new THREE.BufferAttribute(colors, 3, true));
+    if (name === 'rpg') {
+      // the launcher's source model sits rolled 90° off the canonical
+      // frame, so it carries tube-sideways with the grip and sight out to
+      // the left instead of under and over the tube. Roll it once here on
+      // the shared geometry and every consumer agrees — held weapon, the
+      // first-person viewmodel, and any free-standing copy.
+      // (Normals are baked as normalized Int8; rotating in place would
+      // round them to -1/0/1, so promote to float first.)
+      geom.setAttribute('normal', new THREE.BufferAttribute(
+        Float32Array.from(nrm, (v) => v / 127), 3
+      ));
+      geom.rotateZ(Math.PI / 2);
+    }
     geom.computeBoundingSphere();
     template.weaponGeomCache.set(key, geom);
   }

@@ -72,6 +72,7 @@ export class EnemyBot {
     this.burstsFired = 0;
     this.reloadT = 0;
     this.deathT = 0;
+    this.rootT = 0; // planted while a hit reaction plays (see update)
     this.walkT = Math.random() * 10;
 
     // combat personality + tactical state
@@ -199,11 +200,33 @@ export class EnemyBot {
       this.deathClipDur = startDeath(this.group, cause); // 0 -> procedural collapse
       return true;
     }
-    startHit(this.group); // survived — flinch
+    // survived — flinch, and plant the feet for as long as it plays
+    const flinch = startHit(this.group);
+    if (flinch > 0) this.rootT = Math.max(this.rootT, flinch * 0.9);
     return false;
   }
 
+  // Hit reactions (and deaths) are whole-body clips with the legs planted,
+  // so the bot must not slide across the ground while one runs — that reads
+  // as a body gliding on frozen feet. The AI keeps thinking, aiming and
+  // shooting; only the transform is pinned, and only until the clip ends.
   update(dt, ctx) {
+    if (this.rootT > 0) {
+      this.rootT -= dt;
+      const p = this.group.position;
+      const rx = p.x, rz = p.z;
+      this.updateAI(dt, ctx);
+      // the death path re-homes the body itself; don't fight it
+      if (this.state !== 'dying' && this.state !== 'dead') {
+        p.x = rx;
+        p.z = rz;
+      }
+      return;
+    }
+    this.updateAI(dt, ctx);
+  }
+
+  updateAI(dt, ctx) {
     const { playerPos, effects, lethal, onPlayerHit } = ctx;
     this.walkT += dt;
 

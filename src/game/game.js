@@ -1427,7 +1427,9 @@ export class Game {
     for (const c of this.comrades) bodies.push({ p: c.group.position, s: c.smooth });
     if (this.npc) bodies.push({ p: this.npc.group.position, s: this.npc.smooth });
     for (const e of this.enemies) {
-      if (e.alive && !e.elevated) bodies.push({ p: e.group.position });
+      // a bot planted mid-flinch is immovable too, so crowding can't shove
+      // it around while its feet are staged in the hit clip
+      if (e.alive && !e.elevated && !(e.rootT > 0)) bodies.push({ p: e.group.position });
     }
     const walk = this.botCtxExtras().isWalkable;
     const R = 0.62; // body diameter-ish
