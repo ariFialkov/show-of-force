@@ -367,6 +367,55 @@ export class Effects {
     });
   }
 
+  // Floating cash bounty: clean glowing green "+$X.XX" with no backing
+  // plate, drifting up and fading — the betting game keeping score in the
+  // world. Rendered through walls (depthTest off) so a comrade's kill
+  // around a corner still visibly rings the register.
+  cashPop(pos, text) {
+    const c = document.createElement('canvas');
+    const ctx = c.getContext('2d');
+    const font = '700 64px system-ui, -apple-system, "Segoe UI", sans-serif';
+    ctx.font = font;
+    const w = Math.ceil(ctx.measureText(text).width);
+    c.width = w + 64;
+    c.height = 128;
+    ctx.font = font;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    // dark understroke for contrast on bright walls, then saturated green
+    // glyphs under a soft green bloom
+    ctx.lineWidth = 9;
+    ctx.lineJoin = 'round';
+    ctx.strokeStyle = 'rgba(5,38,16,0.9)';
+    ctx.strokeText(text, c.width / 2, 64);
+    ctx.shadowColor = 'rgba(40,255,110,0.9)';
+    ctx.shadowBlur = 18;
+    ctx.fillStyle = '#31e868';
+    ctx.fillText(text, c.width / 2, 64);
+    ctx.fillText(text, c.width / 2, 64);
+    const tex = new THREE.CanvasTexture(c);
+    tex.colorSpace = THREE.SRGBColorSpace;
+    const spr = new THREE.Sprite(new THREE.SpriteMaterial({
+      map: tex, transparent: true, opacity: 0, depthWrite: false, depthTest: false
+    }));
+    spr.renderOrder = 450; // over the world, under the first-person arms
+    spr.position.copy(pos);
+    const h = 0.5;
+    const aspect = c.width / c.height;
+    this._add(spr, 1.5, (it, dt) => {
+      const k = it.life / it.ttl;
+      it.mesh.position.y += dt * (0.55 - k * 0.3); // rises, easing off
+      // perspective-compensated beyond ~7m so a comrade's kill across the
+      // compound still reads, and a slight swell over its life
+      const dist = this.camera ? this.camera.position.distanceTo(it.mesh.position) : 7;
+      const s = h * Math.max(1, dist / 7) * (1 + k * 0.12);
+      it.mesh.scale.set(s * aspect, s, 1);
+      // snap in, hold, then a long fade
+      it.mesh.material.opacity = k < 0.08 ? k / 0.08 : k < 0.55 ? 1 : 1 - (k - 0.55) / 0.45;
+      if (it.life + dt >= it.ttl) it.mesh.material.map?.dispose?.();
+    });
+  }
+
   // round connecting with a body: brief flash + red mist
   hitSpark(pos) {
     const flash = this._sprite(this.flashTex, 0xffb090, 0.85, {

@@ -54,6 +54,7 @@ export class Game {
     this.scene = new THREE.Scene();
     this.camera = new THREE.PerspectiveCamera(BASE_FOV, 1, 0.1, 400);
     this.effects = new Effects(this.scene);
+    this.effects.camera = this.camera; // cash popups keep a readable size at range
     this.controls = new Controls(canvas, controlUi);
     this.controls.onFrag = () => this.throwFrag();
     this.controls.onWeaponSwitch = () => this.switchWeapon();
@@ -1084,9 +1085,37 @@ export class Game {
     const segEnemies = this.enemies.filter((e) => e.seg === step && e.alive);
     r.segEnemyTotal = segEnemies.length;
     for (const e of segEnemies) e.engageDelay = 0.7 + Math.random() * 1.2;
+    // cash bounty pool: this step's deterministic gain, paid out in green
+    // popups over kills and the objective so the pot visibly adds up to it
+    r.stepPoolLeft = Math.max(0, r.bet * (r.rungTarget - r.curRung));
+    r.stepAwarded = 0;
     if (!first) sound.step();
     this.cb.onSegmentStart?.(step, r.lethal);
     this.cb.onObjective?.(this.objective);
+  }
+
+  // How the step's pool is split: every live enemy in the segment is one
+  // share; an undone prop objective (blow the car, plant the charge, drop
+  // the HVT) is a heavier share so its payout reads as the big line item.
+  // Shares are resolved against the LIVE remaining count at award time, so
+  // late reinforcements dilute gracefully and the last event of a step
+  // sweeps the exact remainder — the popups always sum to the step's gain.
+  static CASH_OBJ_SHARE = 1.75;
+  cashObjPending() {
+    const o = this.objective;
+    return o && !o.done && !o.cashAwarded
+      && (o.mech === 'destroy' || o.mech === 'interact' || o.mech === 'hvt');
+  }
+
+  awardCash(share, pos) {
+    const r = this.round;
+    if (!r || !(r.stepPoolLeft > 0)) return;
+    const alive = this.enemies.filter((e) => e.alive && e.seg === r.step).length;
+    const remaining = alive + share + (this.cashObjPending() ? Game.CASH_OBJ_SHARE : 0);
+    const amt = Math.min(r.stepPoolLeft, r.stepPoolLeft * (share / remaining));
+    r.stepPoolLeft -= amt;
+    r.stepAwarded += amt;
+    this.effects.cashPop(pos, `+$${amt.toFixed(2)}`);
   }
 
   // Sealed grey gates stand in this checkpoint's doorways from the moment
@@ -1330,6 +1359,11 @@ export class Game {
     const o = this.objective;
     if (o.done) return;
     o.done = true;
+    if (!o.cashAwarded) {
+      o.cashAwarded = true;
+      const at = (o.consoleProp ?? o.destructible?.group)?.position ?? this.player.pos;
+      this.awardCash(Game.CASH_OBJ_SHARE, at.clone().setY(1.5));
+    }
     if (o.beacon) o.beacon.material.color.set(0x4a9aff);
     if (o.prop === 'charge' && o.destructible?.alive) {
       // the planted charge cooks off after a beat
@@ -1456,6 +1490,13 @@ export class Game {
     this.effects.explosion(blast);
     sound.explosion();
     this.shake = Math.min(this.shake + 0.6, 1);
+    // the objective target going up is the step's big line item (awarded
+    // before the chain kills below, which then split what's left)
+    const o = this.objective;
+    if (o && d === o.destructible && o.mech === 'destroy' && !o.cashAwarded) {
+      o.cashAwarded = true;
+      this.awardCash(Game.CASH_OBJ_SHARE, d.pos.clone().add(new THREE.Vector3(0, 1.9, 0)));
+    }
     if (d.kind === 'post') {
       // barricade breaks apart
       d.group.traverse((o) => { if (o.isMesh) { o.scale.y = 0.3; o.position.y = 0.16; } });
@@ -1863,7 +1904,19 @@ export class Game {
     };
     const r = this.round;
     if (!r || r.over) return;
-    if (enemy.seg === r.step) r.segKills++;
+    if (enemy.seg === r.step) {
+      r.segKills++;
+      // bounty popup over the body — the marked HVT pays the objective's
+      // heavier share, a regular soldier pays one share. Comrade kills
+      // count too: the step's total always adds up on screen.
+      const o = this.objective;
+      const isObjHvt = enemy.isHVT && o?.mech === 'hvt' && !o.cashAwarded;
+      if (isObjHvt) o.cashAwarded = true;
+      this.awardCash(
+        isObjHvt ? Game.CASH_OBJ_SHARE : 1,
+        enemy.group.position.clone().add(new THREE.Vector3(0, 1.55, 0))
+      );
+    }
     if (by === 'player') {
       r.kills++;
       this.cb.onKill?.(r.kills);
@@ -2126,24 +2179,13 @@ export class Game {
     }
     if (o) this.cb.onObjectiveTick?.(detail, warn);
 
-    // pot presentation: creep toward the next rung with objective + travel
-    // progress (starts from 0 — nothing is secured until checkpoint 1)
-    const prevMult = r.curRung;
-    const nextMult = r.rungTarget;
-    const room = this.currentRoomCenter();
-    let distFrac = 0;
-    if (room) {
-      const segCells = this.map.path.filter((p) => p.seg === r.step);
-      const segStart = segCells[0];
-      const S = this.map.cellSize;
-      const total = Math.hypot(room.x - segStart.x * S, room.z - segStart.z * S) || 1;
-      const left = Math.hypot(room.x - playerPos.x, room.z - playerPos.z);
-      distFrac = THREE.MathUtils.clamp(1 - left / total, 0, 1);
-    }
-    const frac = THREE.MathUtils.clamp(distFrac * 0.45 + objFrac * 0.55, 0, 0.98);
-    const targetPot = r.bet * (prevMult + (nextMult - prevMult) * frac);
-    r.pot += (targetPot - r.pot) * Math.min(1, dt * 3);
-    this.cb.onPot?.(r.pot, nextMult * r.bet);
+    // pot presentation: the secured rung plus the bounties banked so far
+    // this step — every green popup is money you watch tick into the total,
+    // and the popups are engineered to sum to the step's deterministic gain
+    void objFrac;
+    const targetPot = r.bet * r.curRung + (r.stepAwarded ?? 0);
+    r.pot += (targetPot - r.pot) * Math.min(1, dt * 5);
+    this.cb.onPot?.(r.pot, r.rungTarget * r.bet);
 
     // health regen outside the bust step
     if (!r.lethal && this.player.health < 100) {
@@ -2283,6 +2325,8 @@ export class Game {
     const r = this.round;
     r.curRung = r.rungTarget; // this rung is now secured
     r.pot = r.bet * r.curRung;
+    r.stepAwarded = 0;
+    r.stepPoolLeft = 0; // stragglers past the checkpoint pay nothing
     this.cb.onPot?.(r.pot, r.pot);
     // wrap up segment furniture: secure the asset, clear the site beacon
     if (this.npc) {
